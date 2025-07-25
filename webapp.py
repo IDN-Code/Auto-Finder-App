@@ -41,10 +41,10 @@ except ImportError:
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(_name_)
+logger = logging.getLogger(__name__)
 
 # Inicializar Flask app
-app = Flask(_name_)
+app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'auto-parts-finder-secret-key-2025')
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
