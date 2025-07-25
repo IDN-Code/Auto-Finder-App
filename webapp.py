@@ -1323,7 +1323,7 @@ initialize_components()
 # PUNTO DE ENTRADA PRINCIPAL
 # ==============================================================================
 
-if _name_ == '_main_':
+if __name__ == '_main_':
     print("=" * 70)
     print("🔧 AUTO PARTS FINDER USA - SISTEMA DE REPUESTOS AUTOMOTRICES")
     print("=" * 70)
