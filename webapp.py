@@ -77,7 +77,7 @@ VEHICLE_DATABASE = {
 class FirebaseAuth:
     """Sistema de autenticación simplificado"""
     
-    def _init_(self):
+    def __init__(self):
         self.firebase_web_api_key = os.environ.get("FIREBASE_WEB_API_KEY")
         logger.info(f"Firebase Auth configurado: {bool(self.firebase_web_api_key)}")
     
@@ -153,7 +153,7 @@ class FirebaseAuth:
 class AutoPartsFinder:
     """Buscador de repuestos automotrices"""
     
-    def _init_(self):
+    def __init__(self):
         self.api_key = os.environ.get('SERPAPI_KEY')
         self.base_url = "https://serpapi.com/search"
         logger.info(f"SerpAPI configurado: {bool(self.api_key)}")
@@ -687,7 +687,7 @@ def home():
                         <div class="product-store">
                             <strong>Tienda:</strong> ${{product.source}}
                         </div>
-                        ${{product.rating ? <div style="font-size: 13px; color: #666; margin: 8px 0;">⭐ ${{product.rating}} estrellas (${{product.reviews}} reseñas)</div> : ''}}
+                        ${{product.rating ? `<div style="font-size: 13px; color: #666; margin: 8px 0;">⭐ ${{product.rating}} estrellas (${{product.reviews}} reseñas)</div>` : ''}}
                         <a href="${{product.link}}" target="_blank" class="product-link">
                             Ver en ${{product.source}} →
                         </a>
@@ -1022,7 +1022,7 @@ def search_page():
                         <div class="product-price">${{product.price}}</div>
                         <div class="product-store"><strong>Tienda:</strong> ${{product.source}}</div>
                         <div style="margin: 10px 0;">
-                            <button onclick="saveFavorite('${{product.title}}')" style="background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; margin-right: 10px;">
+                            <button onclick="saveFavorite('${{product.title.replace(/'/g, "\\'")}}')" style="background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; margin-right: 10px;">
                                 ❤ Guardar
                             </button>
                             <a href="${{product.link}}" target="_blank" class="product-link">Ver en tienda →</a>
@@ -1053,7 +1053,7 @@ def search_page():
             searchHistory.forEach(query => {{
                 html += `
                     <span style="display: inline-block; background: #e3f2fd; color: #1976d2; padding: 5px 10px; border-radius: 15px; margin: 5px 5px 5px 0; cursor: pointer;" 
-                          onclick="document.getElementById('searchQuery').value = '${{query}}'; searchParts();">
+                          onclick="document.getElementById('searchQuery').value = '${{query.replace(/'/g, "\\'")}}'; searchParts();">
                         ${{query}}
                     </span>
                 `;
@@ -1323,7 +1323,7 @@ initialize_components()
 # PUNTO DE ENTRADA PRINCIPAL
 # ==============================================================================
 
-if __name__ == '_main_':
+if __name__ == '__main__':
     print("=" * 70)
     print("🔧 AUTO PARTS FINDER USA - SISTEMA DE REPUESTOS AUTOMOTRICES")
     print("=" * 70)
