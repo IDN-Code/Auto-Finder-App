@@ -1,613 +1,4 @@
-# webapp.py - Auto Parts Finder USA - VERSIÓN CORREGIDA Y FUNCIONAL COMPLETA
-from flask import Flask, request, jsonify, session, redirect, url_for, render_template_string, flash
-import requests
-import os
-import re
-import html
-import time
-import io
-import random
-import logging
-from datetime import datetime, timedelta
-from urllib.parse import urlparse, quote_plus, urljoin
-from functools import wraps
-import json
-
-# Imports opcionales con manejo de errores
-try:
-    from PIL import Image
-    PIL_AVAILABLE = True
-    print("✅ PIL (Pillow) disponible")
-except ImportError:
-    PIL_AVAILABLE = False
-    print("⚠ PIL no disponible")
-
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-    print("✅ Gemini disponible")
-except ImportError:
-    genai = None
-    GEMINI_AVAILABLE = False
-    print("⚠ Gemini no disponible")
-
-try:
-    from bs4 import BeautifulSoup
-    BS4_AVAILABLE = True
-    print("✅ BeautifulSoup4 disponible")
-except ImportError:
-    BS4_AVAILABLE = False
-    print("⚠ BeautifulSoup4 no disponible")
-
-# Configuración de logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Inicializar Flask app
-app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'auto-parts-finder-secret-key-2025')
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SECURE'] = True if os.environ.get('RENDER') else False
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
-
-# Base de datos de vehículos populares en USA
-VEHICLE_DATABASE = {
-    'makes': {
-        'chevrolet': ['silverado', 'equinox', 'malibu', 'tahoe', 'suburban', 'traverse', 'camaro', 'corvette'],
-        'ford': ['f150', 'f250', 'f350', 'escape', 'explorer', 'mustang', 'edge', 'expedition'],
-        'toyota': ['camry', 'corolla', 'rav4', 'highlander', 'prius', 'tacoma', 'tundra', 'sienna'],
-        'honda': ['civic', 'accord', 'crv', 'pilot', 'odyssey', 'ridgeline', 'passport'],
-        'nissan': ['altima', 'sentra', 'rogue', 'murano', 'pathfinder', 'titan', 'frontier'],
-        'jeep': ['wrangler', 'grand cherokee', 'cherokee', 'compass', 'renegade', 'gladiator'],
-        'ram': ['1500', '2500', '3500', 'promaster'],
-        'gmc': ['sierra', 'terrain', 'acadia', 'yukon', 'canyon']
-    },
-    'years': list(range(1990, 2025)),
-    'common_parts': [
-        'brake pads', 'brake rotors', 'oil filter', 'air filter', 'spark plugs', 
-        'battery', 'alternator', 'starter', 'radiator', 'water pump'
-    ]
-}
-
-# ==============================================================================
-# CLASES PRINCIPALES
-# ==============================================================================
-
-class FirebaseAuth:
-    """Sistema de autenticación simplificado"""
-    
-    def __init__(self):
-        self.firebase_web_api_key = os.environ.get("FIREBASE_WEB_API_KEY")
-        logger.info(f"Firebase Auth configurado: {bool(self.firebase_web_api_key)}")
-    
-    def login_user(self, email, password):
-        """Login con credenciales demo para pruebas"""
-        try:
-            # Credenciales demo hardcoded para evitar dependencias
-            if email == "admin@test.com" and password == "password123":
-                return {
-                    'success': True,
-                    'message': 'Login exitoso',
-                    'user_data': {
-                        'user_id': 'demo_user_123',
-                        'email': email,
-                        'display_name': 'Demo User',
-                        'id_token': 'demo_token_12345'
-                    }
-                }
-            else:
-                return {
-                    'success': False,
-                    'message': 'Credenciales incorrectas. Use admin@test.com / password123',
-                    'user_data': None
-                }
-        except Exception as e:
-            logger.error(f"Error en login: {e}")
-            return {
-                'success': False,
-                'message': 'Error interno en autenticación',
-                'user_data': None
-            }
-    
-    def set_user_session(self, user_data):
-        """Establecer sesión de usuario"""
-        try:
-            session['user_id'] = user_data['user_id']
-            session['user_name'] = user_data['display_name']
-            session['user_email'] = user_data['email']
-            session['login_time'] = datetime.now().isoformat()
-            session.permanent = True
-        except Exception as e:
-            logger.error(f"Error estableciendo sesión: {e}")
-    
-    def clear_user_session(self):
-        """Limpiar sesión de usuario"""
-        try:
-            session.clear()
-        except Exception as e:
-            logger.error(f"Error limpiando sesión: {e}")
-    
-    def is_user_logged_in(self):
-        """Verificar si el usuario está logueado"""
-        try:
-            return 'user_id' in session and session.get('user_id') is not None
-        except Exception as e:
-            logger.error(f"Error verificando login: {e}")
-            return False
-    
-    def get_current_user(self):
-        """Obtener usuario actual"""
-        try:
-            if not self.is_user_logged_in():
-                return None
-            return {
-                'user_id': session.get('user_id'),
-                'user_name': session.get('user_name'),
-                'user_email': session.get('user_email')
-            }
-        except Exception as e:
-            logger.error(f"Error obteniendo usuario: {e}")
-            return None
-
-class AutoPartsFinder:
-    """Buscador de repuestos automotrices con SerpAPI real"""
-    
-    def __init__(self):
-        self.api_key = os.environ.get('SERPAPI_KEY')
-        self.base_url = "https://serpapi.com/search"
-        logger.info(f"SerpAPI configurado: {bool(self.api_key)}")
-        
-        # Tiendas populares de auto parts (para fallback)
-        self.stores = [
-            'AutoZone', 'Advance Auto Parts', "O'Reilly Auto Parts", 
-            'NAPA', 'RockAuto', 'Amazon Automotive'
-        ]
-    
-    def search_auto_parts(self, query=None, image_content=None, vehicle_info=None):
-        """Búsqueda principal de repuestos usando SerpAPI real"""
-        try:
-            # Construir query final
-            final_query = self._build_search_query(query, vehicle_info)
-            
-            if not final_query:
-                final_query = "brake pads"
-            
-            logger.info(f"🔍 Buscando: '{final_query}'")
-            print(f"🔍 DEBUG: Query final = '{final_query}'")
-            
-            # Verificar API key
-            if not self.api_key:
-                logger.warning("❌ SERPAPI_KEY no encontrada, usando resultados demo")
-                print("⚠️ DEBUG: Sin SERPAPI_KEY, generando demos")
-                return self._generate_sample_results(final_query, demo_mode=True)
-            
-            # Hacer llamada real a SerpAPI
-            print("🚀 DEBUG: Llamando a SerpAPI...")
-            return self._search_with_serpapi(final_query)
-            
-        except Exception as e:
-            logger.error(f"❌ Error en búsqueda: {e}")
-            print(f"❌ DEBUG: Error en search_auto_parts = {e}")
-            # En caso de error, devolver resultados demo como fallback
-            return self._generate_sample_results(query or "brake pads", demo_mode=True)
-    
-    def _search_with_serpapi(self, query):
-        """Realizar búsqueda real usando SerpAPI"""
-        try:
-            # Parámetros para SerpAPI (Google Shopping)
-            params = {
-                'api_key': self.api_key,
-                'engine': 'google_shopping',
-                'q': query + ' auto parts',
-                'location': 'United States',
-                'hl': 'en',
-                'gl': 'us',
-                'num': 20
-            }
-            
-            logger.info(f"🔍 Llamando a SerpAPI con query: {params['q']}")
-            print(f"🌐 DEBUG: Haciendo petición a SerpAPI...")
-            
-            # Hacer petición HTTP con timeout
-            response = requests.get(self.base_url, params=params, timeout=15)
-            response.raise_for_status()
-            
-            data = response.json()
-            print(f"📊 DEBUG: Respuesta de SerpAPI recibida")
-            
-            # Verificar si hay error en la respuesta
-            if 'error' in data:
-                logger.error(f"❌ Error de SerpAPI: {data['error']}")
-                print(f"❌ DEBUG: Error en SerpAPI = {data['error']}")
-                return self._generate_sample_results(query, demo_mode=True)
-            
-            # Procesar resultados reales
-            shopping_results = data.get('shopping_results', [])
-            print(f"📊 DEBUG: {len(shopping_results)} resultados de shopping")
-            
-            if not shopping_results:
-                logger.warning("⚠️ No se encontraron resultados en SerpAPI")
-                print("⚠️ DEBUG: Sin resultados en SerpAPI, usando demos")
-                return self._generate_sample_results(query, demo_mode=True)
-            
-            # Convertir a formato interno
-            processed_results = []
-            for item in shopping_results[:12]:
-                processed_item = self._process_serpapi_result(item)
-                if processed_item:
-                    processed_results.append(processed_item)
-            
-            print(f"✅ DEBUG: {len(processed_results)} resultados procesados")
-            
-            if len(processed_results) == 0:
-                print("⚠️ DEBUG: No se procesaron resultados válidos, usando demos")
-                return self._generate_sample_results(query, demo_mode=True)
-            
-            logger.info(f"✅ Procesados {len(processed_results)} resultados REALES de SerpAPI")
-            return processed_results
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Error de conexión con SerpAPI: {e}")
-            print(f"❌ DEBUG: Error de conexión = {e}")
-            return self._generate_sample_results(query, demo_mode=True)
-        except requests.exceptions.Timeout:
-            logger.error("❌ Timeout en SerpAPI")
-            print("❌ DEBUG: Timeout en SerpAPI")
-            return self._generate_sample_results(query, demo_mode=True)
-        except Exception as e:
-            logger.error(f"❌ Error inesperado en SerpAPI: {e}")
-            print(f"❌ DEBUG: Error inesperado = {e}")
-            return self._generate_sample_results(query, demo_mode=True)
-
-    def _process_serpapi_result(self, item):
-        """Procesar un resultado individual de SerpAPI"""
-        try:
-            # Extraer datos verificados directamente de SerpAPI
-            title = item.get('title', 'Producto sin título').strip()
-            price = item.get('price', 'Precio no disponible')
-            source = item.get('source', 'Tienda desconocida')
-            link = item.get('link', '#')
-            
-            # ✅ VALIDAR QUE EL LINK SEA REAL DE SERPAPI
-            if not link or link == '#':
-                logger.warning(f"⚠️ Link inválido encontrado para: {title}")
-                return None
-            
-            # Limpiar y validar precio
-            price_numeric = 0.0
-            if price and price != 'Precio no disponible':
-                try:
-                    # Extraer número del precio
-                    price_clean = re.sub(r'[^\d\.]', '', str(price))
-                    if price_clean:
-                        price_numeric = float(price_clean)
-                except Exception as e:
-                    logger.debug(f"No se pudo parsear precio: {price}")
-                    price_numeric = 0.0
-            
-            # Extraer rating y reviews si existen
-            rating = item.get('rating', '')
-            reviews = item.get('reviews', '')
-            
-            # Detectar tipo de repuesto basado en el título
-            part_type = 'Aftermarket'
-            title_lower = title.lower()
-            if any(oem_word in title_lower for oem_word in ['oem', 'original', 'genuine', 'factory']):
-                part_type = 'OEM'
-            
-            return {
-                'title': title,
-                'price': price,
-                'price_numeric': price_numeric,
-                'source': source,
-                'link': link,  # ✅ LINK REAL DIRECTO DE SERPAPI
-                'rating': rating,
-                'reviews': reviews,
-                'part_type': part_type,
-                'search_source': 'serpapi_real',
-                'serpapi_verified': True  # ✅ MARCADO COMO VERIFICADO
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Error procesando resultado SerpAPI: {e}")
-            return None
-
-    def _generate_sample_results(self, query, demo_mode=False):
-        """Generar resultados de ejemplo GARANTIZADOS - NUNCA falla"""
-        try:
-            # Asegurar que query no esté vacío
-            if not query or query.strip() == "":
-                query = "auto parts"
-            
-            print(f"🎭 DEBUG: Generando resultados demo para '{query}'")
-            
-            results = []
-            base_prices = [29.99, 45.99, 67.99, 89.99, 124.99, 199.99]
-            
-            # Partes específicas basadas en query común
-            part_types = ['brake pads', 'oil filter', 'air filter', 'spark plugs', 'battery', 'alternator']
-            
-            for i in range(6):
-                store = self.stores[i % len(self.stores)]
-                price = base_prices[i]
-                
-                # Usar parte específica si está en la lista, sino usar query
-                part_name = part_types[i] if 'part' in query.lower() else query
-                
-                result = {
-                    'title': f'{part_name.title()} - {"Premium OEM" if i % 2 == 0 else "Aftermarket Quality"}',
-                    'price': f'${price:.2f}',
-                    'price_numeric': price,
-                    'source': store,
-                    'link': f"https://www.google.com/search?tbm=shop&q={quote_plus(part_name + ' ' + store)}",
-                    'rating': f"{4.0 + (i * 0.1):.1f}",
-                    'reviews': str(100 + i * 50),
-                    'part_type': 'OEM' if i % 2 == 0 else 'Aftermarket',
-                    'search_source': 'demo',
-                    'serpapi_verified': False,  # ✅ MARCADO COMO NO VERIFICADO
-                    'demo_mode': demo_mode
-                }
-                results.append(result)
-            
-            print(f"✅ DEBUG: Generados {len(results)} resultados demo exitosamente")
-            logger.info(f"✅ Generados {len(results)} resultados demo para: {query}")
-            return results
-            
-        except Exception as e:
-            logger.error(f"❌ Error generando ejemplos: {e}")
-            print(f"❌ DEBUG: Error en _generate_sample_results = {e}")
-            
-            # ÚLTIMO RECURSO - resultado básico garantizado
-            return [{
-                'title': f'Repuesto para: {query}',
-                'price': '$50.00',
-                'price_numeric': 50.0,
-                'source': 'AutoZone',
-                'link': f"https://www.google.com/search?tbm=shop&q={quote_plus(query)}",
-                'rating': '4.5',
-                'reviews': '250',
-                'part_type': 'Demo',
-                'search_source': 'demo',
-                'serpapi_verified': False,
-                'demo_mode': True
-            }]
-
-    def _generate_error_fallback(self, error_message):
-        """Generar mensaje de error cuando falla la API"""
-        return [{
-            'title': '❌ Error en la búsqueda de repuestos',
-            'price': 'N/A',
-            'price_numeric': 0.0,
-            'source': 'Sistema - Error',
-            'link': '/',
-            'rating': '',
-            'reviews': '',
-            'part_type': 'Error',
-            'search_source': 'error',
-            'error_message': error_message,
-            'serpapi_verified': False
-        }]
-
-    def _generate_no_results_message(self, query):
-        """Generar mensaje cuando no hay resultados en SerpAPI"""
-        return [{
-            'title': f'No se encontraron repuestos para: "{query}"',
-            'price': 'N/A',
-            'price_numeric': 0.0,
-            'source': 'Sistema - Sin resultados',
-            'link': f"https://www.google.com/search?tbm=shop&q={quote_plus(query + ' auto parts')}",
-            'rating': '',
-            'reviews': '',
-            'part_type': 'Info',
-            'search_source': 'no_results',
-            'serpapi_verified': False
-        }]
-
-    def _build_search_query(self, query, vehicle_info):
-        """Construir query de búsqueda optimizada"""
-        try:
-            parts = []
-            
-            # Agregar información del vehículo si existe
-            if vehicle_info:
-                if vehicle_info.get('year'):
-                    parts.append(str(vehicle_info['year']))
-                if vehicle_info.get('make'):
-                    parts.append(vehicle_info['make'].lower())
-                if vehicle_info.get('model'):
-                    parts.append(vehicle_info['model'].lower())
-            
-            # Agregar query del usuario
-            if query and query.strip():
-                parts.append(query.strip())
-            
-            # Si no hay nada, usar término genérico
-            if not parts:
-                final_query = "brake pads"
-            else:
-                final_query = ' '.join(parts).strip()
-            
-            print(f"🔍 DEBUG: Query construida = '{final_query}'")
-            logger.info(f"🔍 Query construida: '{final_query}'")
-            return final_query
-            
-        except Exception as e:
-            logger.error(f"❌ Error construyendo query: {e}")
-            print(f"❌ DEBUG: Error en _build_search_query = {e}")
-            return "brake pads"  # Fallback garantizado
-
-# ==============================================================================
-# FUNCIONES AUXILIARES
-# ==============================================================================
-
-def login_required(f):
-    """Decorador para requerir login"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        try:
-            if not firebase_auth or not firebase_auth.is_user_logged_in():
-                flash('Debes iniciar sesión para acceder a esta página.', 'warning')
-                return redirect(url_for('auth_login_page'))
-            return f(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"Error en login_required: {e}")
-            return redirect(url_for('auth_login_page'))
-    return decorated_function
-
-def validate_image(image_content):
-    """Validar imagen subida"""
-    if not PIL_AVAILABLE or not image_content:
-        return False
-    try:
-        image = Image.open(io.BytesIO(image_content))
-        return image.size[0] > 10 and image.size[1] > 10
-    except Exception as e:
-        logger.error(f"Error validando imagen: {e}")
-        return False
-
-def render_page(title, content):
-    """Renderizar página con template base"""
-    template = f'''<!DOCTYPE html>
-<html lang="es">
-<head>
-    <title>{html.escape(title)}</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; 
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); 
-            min-height: 100vh; 
-            padding: 15px; 
-        }}
-        .container {{ 
-            max-width: 800px; 
-            margin: 0 auto; 
-            background: white; 
-            padding: 30px; 
-            border-radius: 12px; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2); 
-        }}
-        h1 {{ color: #1e3c72; text-align: center; margin-bottom: 10px; font-size: 2.2em; }}
-        .subtitle {{ text-align: center; color: #666; margin-bottom: 30px; font-size: 1.1em; }}
-        input, select {{ 
-            width: 100%; 
-            padding: 14px; 
-            margin: 10px 0; 
-            border: 2px solid #e1e5e9; 
-            border-radius: 8px; 
-            font-size: 16px; 
-            transition: border-color 0.3s;
-        }}
-        input:focus, select:focus {{ outline: none; border-color: #1e3c72; }}
-        button {{ 
-            background: #1e3c72; 
-            color: white; 
-            border: none; 
-            border-radius: 8px; 
-            cursor: pointer; 
-            font-size: 16px; 
-            font-weight: 600; 
-            padding: 14px 24px; 
-            transition: background-color 0.3s;
-        }}
-        button:hover {{ background: #2a5298; }}
-        .search-bar {{ display: flex; gap: 12px; margin-bottom: 25px; }}
-        .search-bar input {{ flex: 1; margin: 0; }}
-        .search-bar button {{ margin: 0; }}
-        .vehicle-form {{ 
-            background: #f8f9fa; 
-            padding: 25px; 
-            border-radius: 10px; 
-            margin: 20px 0; 
-            border: 1px solid #dee2e6;
-        }}
-        .vehicle-row {{ 
-            display: grid; 
-            grid-template-columns: 1fr 1fr 1fr; 
-            gap: 15px; 
-            margin-bottom: 15px; 
-        }}
-        .tips {{ 
-            background: #e8f4f8; 
-            border-left: 4px solid #1e3c72; 
-            padding: 20px; 
-            border-radius: 6px; 
-            margin-bottom: 20px; 
-            font-size: 14px; 
-        }}
-        .error {{ 
-            background: #ffebee; 
-            color: #c62828; 
-            padding: 15px; 
-            border-radius: 8px; 
-            margin: 15px 0; 
-            display: none; 
-            border-left: 4px solid #d32f2f;
-        }}
-        .loading {{ 
-            text-align: center; 
-            padding: 40px; 
-            display: none; 
-        }}
-        .spinner {{ 
-            border: 4px solid #f3f3f3; 
-            border-top: 4px solid #1e3c72; 
-            border-radius: 50%; 
-            width: 50px; 
-            height: 50px; 
-            animation: spin 1s linear infinite; 
-            margin: 0 auto 20px; 
-        }}
-        @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
-        .user-info {{ 
-            background: #e3f2fd; 
-            padding: 15px; 
-            border-radius: 8px; 
-            margin-bottom: 20px; 
-            text-align: center; 
-            font-weight: 500;
-        }}
-        .user-info a {{ color: #1976d2; text-decoration: none; font-weight: 600; }}
-        .user-info a:hover {{ text-decoration: underline; }}
-        .image-upload {{ 
-            background: #f8f9fa; 
-            border: 3px dashed #dee2e6; 
-            border-radius: 10px; 
-            padding: 30px; 
-            text-align: center; 
-            margin: 20px 0; 
-            cursor: pointer; 
-            transition: all 0.3s ease;
-        }}
-        .image-upload:hover {{ border-color: #1e3c72; background: #e3f2fd; }}
-        .image-upload input[type="file"] {{ display: none; }}
-        .or-divider {{ 
-            text-align: center; 
-            margin: 25px 0; 
-            color: #666; 
-            font-weight: 600; 
-            position: relative; 
-        }}
-        .or-divider:before {{ 
-            content: ''; 
-            position: absolute; 
-            top: 50%; 
-            left: 0; 
-            right: 0; 
-            height: 1px; 
-            background: #dee2e6; 
-            z-index: 1; 
-        }}
-        .or-divider span {{ 
-            background: white; 
-            padding: 0 20px; 
-            position: relative; 
-            z-index: 2; 
-        }}
-        .part-badge {{ 
+.part-badge {{ 
             display: inline-block; 
             color: white; 
             padding: 4px 10px; 
@@ -692,17 +83,23 @@ def home():
     try:
         vehicle_data_json = json.dumps(VEHICLE_DATABASE)
         
-        # Verificar estado de SerpAPI
-        serpapi_status = "✅ Configurado" if os.environ.get('SERPAPI_KEY') else "⚠️ No configurado (modo demo)"
+        # Verificar estado de SerpAPI con verificación mejorada
+        serpapi_key = os.environ.get('SERPAPI_KEY')
+        if serpapi_key and serpapi_key.strip():
+            serpapi_status = "✅ Configurado - Resultados Reales"
+            status_color = "#e8f5e8"
+        else:
+            serpapi_status = "⚠️ No configurado - Modo Demo"
+            status_color = "#fff3cd"
         
         home_content = f'''
         <div class="container">
             <h1>🔧 Auto Parts Finder USA</h1>
             <div class="subtitle">Encuentra repuestos automotrices en las mejores tiendas de Estados Unidos</div>
             
-            <div style="background: {'#e8f5e8' if os.environ.get('SERPAPI_KEY') else '#fff3cd'}; padding: 15px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
+            <div style="background: {status_color}; padding: 15px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
                 <strong>Estado SerpAPI:</strong> {serpapi_status}
-                {'' if os.environ.get('SERPAPI_KEY') else '<br><small>Configure SERPAPI_KEY para resultados reales de tiendas</small>'}
+                {'' if serpapi_key else '<br><small>Configure SERPAPI_KEY para resultados reales de tiendas</small>'}
             </div>
             
             <div class="tips">
@@ -846,6 +243,477 @@ def home():
             }}
             
             showLoading(true);
+            hideError();
+            clearResults();
+            
+            // Agregar al historial
+            addToHistory(query);
+            
+            const formData = new FormData();
+            formData.append('query', query);
+            
+            try {{
+                const response = await fetch('/api/search-parts', {{
+                    method: 'POST',
+                    body: formData
+                }});
+                
+                const result = await response.json();
+                
+                if (result.success) {{
+                    displayResults(result.products);
+                }} else {{
+                    showError(result.message || 'Error en la búsqueda');
+                }}
+            }} catch (error) {{
+                console.error('Error:', error);
+                showError('Error de conexión');
+            }} finally {{
+                showLoading(false);
+            }}
+        }}
+        
+        function displayResults(products) {{
+            if (!products || products.length === 0) {{
+                showError('No se encontraron repuestos');
+                return;
+            }}
+            
+            const resultsContainer = document.getElementById('searchResults');
+            
+            // Contar resultados reales vs demo
+            const realResults = products.filter(p => p.serpapi_verified === true);
+            const resultType = realResults.length > 0 ? 'Resultados Verificados Premium' : 'Resultados Demo Premium';
+            const resultColor = realResults.length > 0 ? '#28a745' : '#ff9800';
+            const resultIcon = realResults.length > 0 ? '✅' : '⚠️';
+            
+            let html = `
+                <div style="background: linear-gradient(135deg, #e8f5e8 0%, #f0f8f0 100%); padding: 25px; border-radius: 12px; margin: 30px 0; border-left: 5px solid ${{resultColor}};">
+                    <h3 style="color: #155724;">${{resultIcon}} ${{resultType}} (${{products.length}} encontrados)</h3>
+                    ${{realResults.length > 0 ? 
+                        '<p style="color: #155724; font-size: 14px;">🔗 Enlaces directos verificados a tiendas reales</p>' : 
+                        '<p style="color: #856404; font-size: 14px;">⚠️ Configure SERPAPI_KEY para resultados reales</p>'
+                    }}
+                </div>
+                <div class="product-grid">
+            `;
+            
+            products.forEach(product => {{
+                const isReal = product.serpapi_verified === true;
+                const cardClass = isReal ? 'verified' : 'demo';
+                const badgeClass = isReal ? 'verified' : 'demo';
+                const badgeText = isReal ? '✅ Verificado' : '⚠️ Demo';
+                const linkClass = isReal ? 'verified' : 'demo';
+                
+                html += `
+                    <div class="product-card ${{cardClass}}">
+                        <h4 class="product-title">
+                            ${{product.title}} 
+                            <span class="part-badge ${{badgeClass}}">${{badgeText}}</span>
+                        </h4>
+                        <div class="product-price">${{product.price}}</div>
+                        <div class="product-store"><strong>Tienda:</strong> ${{product.source}}</div>
+                        <div style="margin: 10px 0;">
+                            <button onclick="saveFavorite('${{product.title.replace(/'/g, "\\'")}}')" style="background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; margin-right: 10px;">
+                                ❤ Guardar
+                            </button>
+                            <a href="${{product.link}}" target="_blank" class="product-link ${{linkClass}}">
+                                ${{isReal ? 'Ver Producto Real →' : 'Buscar en Google →'}}
+                            </a>
+                        </div>
+                    </div>
+                `;
+            }});
+            
+            html += '</div>';
+            resultsContainer.innerHTML = html;
+        }}
+        
+        function addToHistory(query) {{
+            searchHistory.unshift(query);
+            searchHistory = [...new Set(searchHistory)].slice(0, 5);
+            localStorage.setItem('autoparts_search_history', JSON.stringify(searchHistory));
+            updateHistoryDisplay();
+        }}
+        
+        function updateHistoryDisplay() {{
+            const historyContainer = document.getElementById('searchHistory');
+            if (searchHistory.length === 0) {{
+                historyContainer.innerHTML = '<p style="color: #666; font-style: italic;">Tus búsquedas aparecerán aquí...</p>';
+                return;
+            }}
+            
+            let html = '';
+            searchHistory.forEach(query => {{
+                html += `
+                    <span style="display: inline-block; background: #e3f2fd; color: #1976d2; padding: 5px 10px; border-radius: 15px; margin: 5px 5px 5px 0; cursor: pointer;" 
+                          onclick="document.getElementById('searchQuery').value = '${{query.replace(/'/g, "\\'")}}'; searchParts();">
+                        ${{query}}
+                    </span>
+                `;
+            }});
+            historyContainer.innerHTML = html;
+        }}
+        
+        function saveFavorite(title) {{
+            alert('Repuesto guardado en favoritos: ' + title);
+        }}
+        
+        function showLoading(show) {{
+            document.getElementById('searchLoading').style.display = show ? 'block' : 'none';
+        }}
+        
+        function showError(message) {{
+            const errorDiv = document.getElementById('searchError');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }}
+        
+        function hideError() {{
+            document.getElementById('searchError').style.display = 'none';
+        }}
+        
+        function clearResults() {{
+            document.getElementById('searchResults').innerHTML = '';
+        }}
+        
+        // Inicializar
+        document.addEventListener('DOMContentLoaded', function() {{
+            updateHistoryDisplay();
+            
+            document.getElementById('searchQuery').addEventListener('keypress', function(e) {{
+                if (e.key === 'Enter') {{
+                    searchParts();
+                }}
+            }});
+        }});
+        </script>
+        '''
+        
+        return render_page("Búsqueda Premium - Auto Parts Finder", search_content)
+        
+    except Exception as e:
+        logger.error(f"Error in search page: {e}")
+        return redirect(url_for('auth_login_page'))
+
+@app.route('/logout')
+def logout():
+    """Cerrar sesión"""
+    try:
+        if firebase_auth:
+            firebase_auth.clear_user_session()
+        flash('Has cerrado sesión correctamente', 'success')
+        return redirect(url_for('home'))
+    except Exception as e:
+        logger.error(f"Error en logout: {e}")
+        return redirect(url_for('home'))
+
+@app.route('/api/search-parts-public', methods=['POST'])
+def api_search_parts_public():
+    """API de búsqueda pública con debug mejorado"""
+    try:
+        query = request.form.get('query', '').strip()
+        vehicle_year = request.form.get('vehicle_year', '').strip()
+        vehicle_make = request.form.get('vehicle_make', '').strip()
+        vehicle_model = request.form.get('vehicle_model', '').strip()
+        
+        print(f"📥 DEBUG: Búsqueda recibida - Query: '{query}', Vehículo: {vehicle_year} {vehicle_make} {vehicle_model}")
+        logger.info(f"📥 Búsqueda recibida - Query: '{query}', Vehículo: {vehicle_year} {vehicle_make} {vehicle_model}")
+        
+        # Procesar imagen si existe
+        image_content = None
+        image_file = request.files.get('image')
+        if image_file and image_file.filename:
+            try:
+                image_content = image_file.read()
+                print(f"📷 DEBUG: Imagen recibida: {image_file.filename}, tamaño: {len(image_content)} bytes")
+                if not validate_image(image_content):
+                    print("❌ DEBUG: Imagen no válida")
+                    return jsonify({
+                        'success': False, 
+                        'message': 'Imagen no válida. Use formatos JPG, PNG o WEBP.'
+                    })
+            except Exception as e:
+                logger.error(f"Error procesando imagen: {e}")
+                print(f"❌ DEBUG: Error procesando imagen: {e}")
+                return jsonify({
+                    'success': False, 
+                    'message': 'Error procesando la imagen'
+                })
+        
+        # Validación mejorada
+        if not query and not image_content:
+            print("❌ DEBUG: No hay query ni imagen")
+            return jsonify({
+                'success': False, 
+                'message': 'Proporciona un término de búsqueda o una imagen'
+            })
+        
+        # Si no hay query, usar uno por defecto
+        if not query:
+            query = "brake pads"
+            print(f"🔄 DEBUG: Usando query por defecto: '{query}'")
+        
+        # Información del vehículo
+        vehicle_info = None
+        if vehicle_year or vehicle_make or vehicle_model:
+            vehicle_info = {
+                'year': vehicle_year,
+                'make': vehicle_make,
+                'model': vehicle_model
+            }
+            print(f"🚗 DEBUG: Info del vehículo: {vehicle_info}")
+        
+        # Verificar que AutoPartsFinder esté disponible
+        if not auto_parts_finder:
+            print("❌ DEBUG: AutoPartsFinder no está inicializado")
+            logger.error("❌ AutoPartsFinder no está inicializado")
+            return jsonify({
+                'success': False, 
+                'message': 'Servicio de búsqueda no disponible temporalmente'
+            })
+        
+        # Realizar búsqueda
+        print(f"🔍 DEBUG: Iniciando búsqueda...")
+        logger.info(f"🔍 Iniciando búsqueda...")
+        
+        products = auto_parts_finder.search_auto_parts(
+            query=query,
+            image_content=image_content,
+            vehicle_info=vehicle_info
+        )
+        
+        print(f"📊 DEBUG: Resultados obtenidos: {len(products) if products else 0}")
+        logger.info(f"📊 Resultados obtenidos: {len(products) if products else 0}")
+        
+        # Verificar que tenemos resultados
+        if not products or len(products) == 0:
+            print("⚠️ DEBUG: No se obtuvieron productos, forzando resultados demo")
+            logger.warning("⚠️ No se obtuvieron productos, forzando resultados demo")
+            # Forzar resultados demo
+            products = auto_parts_finder._generate_sample_results(query, demo_mode=True)
+        
+        # Información adicional de la búsqueda
+        search_info = {
+            'query': query,
+            'has_image': bool(image_content),
+            'vehicle': None,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        if vehicle_info and any(vehicle_info.values()):
+            vehicle_parts = [p for p in [vehicle_info.get('year'), 
+                           vehicle_info.get('make', '').title(), 
+                           vehicle_info.get('model', '').upper()] if p]
+            search_info['vehicle'] = ' '.join(vehicle_parts)
+        
+        print(f"✅ DEBUG: Respuesta exitosa con {len(products)} productos")
+        logger.info(f"✅ Respuesta exitosa con {len(products)} productos")
+        
+        return jsonify({
+            'success': True,
+            'products': products,
+            'search_info': search_info,
+            'count': len(products)
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error en búsqueda pública: {e}")
+        print(f"❌ DEBUG: Error en búsqueda pública: {e}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error interno del servidor: {str(e)}'
+        })
+
+@app.route('/api/search-parts', methods=['POST'])
+@login_required
+def api_search_parts():
+    """API de búsqueda para usuarios autenticados"""
+    try:
+        query = request.form.get('query', '').strip()
+        
+        print(f"🔍 DEBUG: Búsqueda premium - Query: '{query}'")
+        
+        if not query:
+            return jsonify({
+                'success': False, 
+                'message': 'Término de búsqueda requerido'
+            })
+        
+        if not auto_parts_finder:
+            print("❌ DEBUG: AutoPartsFinder no disponible")
+            return jsonify({
+                'success': False, 
+                'message': 'Servicio no disponible'
+            })
+        
+        products = auto_parts_finder.search_auto_parts(query=query)
+        
+        print(f"✅ DEBUG: Búsqueda premium completada - {len(products)} productos")
+        
+        return jsonify({
+            'success': True,
+            'products': products,
+            'count': len(products),
+            'premium': True
+        })
+        
+    except Exception as e:
+        logger.error(f"Error en búsqueda autenticada: {e}")
+        print(f"❌ DEBUG: Error en búsqueda autenticada: {e}")
+        return jsonify({
+            'success': False, 
+            'message': 'Error interno del servidor'
+        })
+
+# ==============================================================================
+# MANEJADORES DE ERRORES
+# ==============================================================================
+
+@app.errorhandler(404)
+def not_found(error):
+    """Página no encontrada"""
+    content = '''
+    <div class="container">
+        <h1>🚫 Página No Encontrada</h1>
+        <div class="subtitle">Error 404</div>
+        <div style="text-align: center; margin: 40px 0;">
+            <p style="color: #666; margin-bottom: 30px;">La página que buscas no existe o ha sido movida.</p>
+            <a href="/" style="background: #1e3c72; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: 600;">
+                🏠 Volver al Inicio
+            </a>
+        </div>
+    </div>
+    '''
+    return render_page("Página No Encontrada - Auto Parts Finder", content), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    """Error interno del servidor"""
+    content = '''
+    <div class="container">
+        <h1>⚠ Error Interno</h1>
+        <div class="subtitle">Error 500</div>
+        <div style="text-align: center; margin: 40px 0;">
+            <p style="color: #666; margin-bottom: 30px;">Ha ocurrido un error interno en el servidor. Nuestro equipo ha sido notificado.</p>
+            <a href="/" style="background: #1e3c72; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: 600;">
+                🔄 Reintentar
+            </a>
+        </div>
+    </div>
+    '''
+    return render_page("Error Interno - Auto Parts Finder", content), 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Manejador de excepciones generales"""
+    logger.error(f"Excepción no manejada: {e}")
+    content = '''
+    <div class="container">
+        <h1>❌ Error Inesperado</h1>
+        <div class="subtitle">Algo salió mal</div>
+        <div style="text-align: center; margin: 40px 0;">
+            <p style="color: #666; margin-bottom: 30px;">Ha ocurrido un error inesperado. Por favor intenta nuevamente.</p>
+            <a href="/" style="background: #1e3c72; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: 600;">
+                🏠 Volver al Inicio
+            </a>
+        </div>
+    </div>
+    '''
+    return render_page("Error - Auto Parts Finder", content), 500
+
+# ==============================================================================
+# INICIALIZACIÓN SEGURA DE COMPONENTES
+# ==============================================================================
+
+def initialize_components():
+    """Inicializar todos los componentes de la aplicación de forma segura"""
+    global firebase_auth, auto_parts_finder
+    
+    print("\n🔧 INICIALIZANDO COMPONENTES...")
+    
+    # Inicializar Firebase Auth
+    try:
+        firebase_auth = FirebaseAuth()
+        logger.info("✅ FirebaseAuth inicializado correctamente")
+        print("✅ DEBUG: FirebaseAuth inicializado")
+    except Exception as e:
+        logger.error(f"❌ Error inicializando FirebaseAuth: {e}")
+        print(f"❌ DEBUG: Error en FirebaseAuth: {e}")
+        firebase_auth = None
+    
+    # Inicializar AutoPartsFinder
+    try:
+        auto_parts_finder = AutoPartsFinder()
+        logger.info("✅ AutoPartsFinder inicializado correctamente")
+        print("✅ DEBUG: AutoPartsFinder inicializado completamente")
+    except Exception as e:
+        logger.error(f"❌ Error inicializando AutoPartsFinder: {e}")
+        print(f"❌ DEBUG: Error en AutoPartsFinder: {e}")
+        auto_parts_finder = None
+    
+    print("🔧 Inicialización de componentes completada\n")
+
+# Inicializar componentes al importar
+initialize_components()
+
+# ==============================================================================
+# PUNTO DE ENTRADA PRINCIPAL
+# ==============================================================================
+
+if __name__ == '__main__':
+    print("=" * 70)
+    print("🔧 AUTO PARTS FINDER USA - SISTEMA DE REPUESTOS AUTOMOTRICES")
+    print("=" * 70)
+    
+    # Información del sistema
+    port = int(os.environ.get('PORT', 5000))
+    debug_mode = os.environ.get('FLASK_ENV') == 'development'
+    
+    print(f"🌐 Puerto: {port}")
+    print(f"🔧 Modo Debug: {debug_mode}")
+    print(f"🖼  PIL (imágenes): {'✅ Disponible' if PIL_AVAILABLE else '❌ No disponible'}")
+    print(f"🤖 Gemini AI: {'✅ Disponible' if GEMINI_AVAILABLE else '❌ No disponible'}")
+    print(f"🕷  BeautifulSoup: {'✅ Disponible' if BS4_AVAILABLE else '❌ No disponible'}")
+    print(f"🔐 Firebase Auth: {'✅ Configurado' if firebase_auth else '❌ Error'}")
+    print(f"🔍 Auto Parts Finder: {'✅ Activo' if auto_parts_finder else '❌ Error'}")
+    
+    # Estado de SerpAPI MEJORADO
+    serpapi_key = os.environ.get('SERPAPI_KEY')
+    if serpapi_key and serpapi_key.strip():
+        print(f"🔑 SerpAPI: ✅ CONFIGURADO CORRECTAMENTE")
+        print(f"   Key: {serpapi_key[:4]}...{serpapi_key[-4:]} (longitud: {len(serpapi_key)})")
+        print("   ➡️ Mostrará resultados REALES de tiendas")
+    else:
+        print("🔑 SerpAPI: ⚠️ NO CONFIGURADO")
+        print("   ➡️ Mostrará resultados DEMO")
+        print("   💡 Configure SERPAPI_KEY para resultados reales")
+    
+    print("=" * 70)
+    print("🚀 Iniciando servidor...")
+    print("📝 Credenciales demo: admin@test.com / password123")
+    print("🔗 Página principal: http://localhost:5000")
+    print("💡 Para debugging: Revisa la consola del navegador (F12)")
+    print("🔍 DEBUG: Revisar logs para mensajes de debug de SerpAPI")
+    print("=" * 70)
+    
+    try:
+        app.run(
+            host='0.0.0.0', 
+            port=port, 
+            debug=debug_mode,
+            use_reloader=debug_mode
+        )
+    except Exception as e:
+        logger.error(f"❌ Error crítico iniciando la aplicación: {e}")
+        print(f"\n❌ ERROR CRÍTICO: {e}")
+        print("💡 Verificaciones:")
+        print("   - Puerto disponible")
+        print("   - Permisos de red")
+        print("   - Variables de entorno")
+        print("   - Dependencias instaladas")
+        if not serpapi_key:
+            print("   - Configure SERPAPI_KEY para resultados reales")true);
             hideError();
             clearResults();
             
@@ -1249,469 +1117,694 @@ def search_page():
                 return;
             }}
             
-            showLoading(true);
-            hideError();
-            clearResults();
-            
-            // Agregar al historial
-            addToHistory(query);
-            
-            const formData = new FormData();
-            formData.append('query', query);
-            
-            try {{
-                const response = await fetch('/api/search-parts', {{
-                    method: 'POST',
-                    body: formData
-                }});
-                
-                const result = await response.json();
-                
-                if (result.success) {{
-                    displayResults(result.products);
-                }} else {{
-                    showError(result.message || 'Error en la búsqueda');
-                }}
-            }} catch (error) {{
-                console.error('Error:', error);
-                showError('Error de conexión');
-            }} finally {{
-                showLoading(false);
-            }}
-        }}
-        
-        function displayResults(products) {{
-            if (!products || products.length === 0) {{
-                showError('No se encontraron repuestos');
-                return;
-            }}
-            
-            const resultsContainer = document.getElementById('searchResults');
-            
-            // Contar resultados reales vs demo
-            const realResults = products.filter(p => p.serpapi_verified === true);
-            const resultType = realResults.length > 0 ? 'Resultados Verificados Premium' : 'Resultados Demo Premium';
-            const resultColor = realResults.length > 0 ? '#28a745' : '#ff9800';
-            const resultIcon = realResults.length > 0 ? '✅' : '⚠️';
-            
-            let html = `
-                <div style="background: linear-gradient(135deg, #e8f5e8 0%, #f0f8f0 100%); padding: 25px; border-radius: 12px; margin: 30px 0; border-left: 5px solid ${{resultColor}};">
-                    <h3 style="color: #155724;">${{resultIcon}} ${{resultType}} (${{products.length}} encontrados)</h3>
-                    ${{realResults.length > 0 ? 
-                        '<p style="color: #155724; font-size: 14px;">🔗 Enlaces directos verificados a tiendas reales</p>' : 
-                        '<p style="color: #856404; font-size: 14px;">⚠️ Configure SERPAPI_KEY para resultados reales</p>'
-                    }}
-                </div>
-                <div class="product-grid">
-            `;
-            
-            products.forEach(product => {{
-                const isReal = product.serpapi_verified === true;
-                const cardClass = isReal ? 'verified' : 'demo';
-                const badgeClass = isReal ? 'verified' : 'demo';
-                const badgeText = isReal ? '✅ Verificado' : '⚠️ Demo';
-                const linkClass = isReal ? 'verified' : 'demo';
-                
-                html += `
-                    <div class="product-card ${{cardClass}}">
-                        <h4 class="product-title">
-                            ${{product.title}} 
-                            <span class="part-badge ${{badgeClass}}">${{badgeText}}</span>
-                        </h4>
-                        <div class="product-price">${{product.price}}</div>
-                        <div class="product-store"><strong>Tienda:</strong> ${{product.source}}</div>
-                        <div style="margin: 10px 0;">
-                            <button onclick="saveFavorite('${{product.title.replace(/'/g, "\\'")}}')" style="background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; margin-right: 10px;">
-                                ❤ Guardar
-                            </button>
-                            <a href="${{product.link}}" target="_blank" class="product-link ${{linkClass}}">
-                                ${{isReal ? 'Ver Producto Real →' : 'Buscar en Google →'}}
-                            </a>
-                        </div>
-                    </div>
-                `;
-            }});
-            
-            html += '</div>';
-            resultsContainer.innerHTML = html;
-        }}
-        
-        function addToHistory(query) {{
-            searchHistory.unshift(query);
-            searchHistory = [...new Set(searchHistory)].slice(0, 5); // Solo últimas 5 búsquedas únicas
-            localStorage.setItem('autoparts_search_history', JSON.stringify(searchHistory));
-            updateHistoryDisplay();
-        }}
-        
-        function updateHistoryDisplay() {{
-            const historyContainer = document.getElementById('searchHistory');
-            if (searchHistory.length === 0) {{
-                historyContainer.innerHTML = '<p style="color: #666; font-style: italic;">Tus búsquedas aparecerán aquí...</p>';
-                return;
-            }}
-            
-            let html = '';
-            searchHistory.forEach(query => {{
-                html += `
-                    <span style="display: inline-block; background: #e3f2fd; color: #1976d2; padding: 5px 10px; border-radius: 15px; margin: 5px 5px 5px 0; cursor: pointer;" 
-                          onclick="document.getElementById('searchQuery').value = '${{query.replace(/'/g, "\\'")}}'; searchParts();">
-                        ${{query}}
-                    </span>
-                `;
-            }});
-            historyContainer.innerHTML = html;
-        }}
-        
-        function saveFavorite(title) {{
-            alert('Repuesto guardado en favoritos: ' + title);
-        }}
-        
-        function showLoading(show) {{
-            document.getElementById('searchLoading').style.display = show ? 'block' : 'none';
-        }}
-        
-        function showError(message) {{
-            const errorDiv = document.getElementById('searchError');
-            errorDiv.textContent = message;
-            errorDiv.style.display = 'block';
-        }}
-        
-        function hideError() {{
-            document.getElementById('searchError').style.display = 'none';
-        }}
-        
-        function clearResults() {{
-            document.getElementById('searchResults').innerHTML = '';
-        }}
-        
-        // Inicializar
-        document.addEventListener('DOMContentLoaded', function() {{
-            updateHistoryDisplay();
-            
-            document.getElementById('searchQuery').addEventListener('keypress', function(e) {{
-                if (e.key === 'Enter') {{
-                    searchParts();
-                }}
-            }});
-        }});
-        </script>
-        '''
-        
-        return render_page("Búsqueda Premium - Auto Parts Finder", search_content)
-        
-    except Exception as e:
-        logger.error(f"Error in search page: {e}")
-        return redirect(url_for('auth_login_page'))
+            showLoading(# webapp.py - Auto Parts Finder USA - VERSIÓN CORREGIDA CON DEBUG SERPAPI
+from flask import Flask, request, jsonify, session, redirect, url_for, render_template_string, flash
+import requests
+import os
+import re
+import html
+import time
+import io
+import random
+import logging
+from datetime import datetime, timedelta
+from urllib.parse import urlparse, quote_plus, urljoin
+from functools import wraps
+import json
 
-@app.route('/logout')
-def logout():
-    """Cerrar sesión"""
-    try:
-        if firebase_auth:
-            firebase_auth.clear_user_session()
-        flash('Has cerrado sesión correctamente', 'success')
-        return redirect(url_for('home'))
-    except Exception as e:
-        logger.error(f"Error en logout: {e}")
-        return redirect(url_for('home'))
+# Imports opcionales con manejo de errores
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+    print("✅ PIL (Pillow) disponible")
+except ImportError:
+    PIL_AVAILABLE = False
+    print("⚠ PIL no disponible")
 
-@app.route('/api/search-parts-public', methods=['POST'])
-def api_search_parts_public():
-    """API de búsqueda pública con debug mejorado"""
-    try:
-        query = request.form.get('query', '').strip()
-        vehicle_year = request.form.get('vehicle_year', '').strip()
-        vehicle_make = request.form.get('vehicle_make', '').strip()
-        vehicle_model = request.form.get('vehicle_model', '').strip()
-        
-        print(f"📥 DEBUG: Búsqueda recibida - Query: '{query}', Vehículo: {vehicle_year} {vehicle_make} {vehicle_model}")
-        logger.info(f"📥 Búsqueda recibida - Query: '{query}', Vehículo: {vehicle_year} {vehicle_make} {vehicle_model}")
-        
-        # Procesar imagen si existe
-        image_content = None
-        image_file = request.files.get('image')
-        if image_file and image_file.filename:
-            try:
-                image_content = image_file.read()
-                print(f"📷 DEBUG: Imagen recibida: {image_file.filename}, tamaño: {len(image_content)} bytes")
-                if not validate_image(image_content):
-                    print("❌ DEBUG: Imagen no válida")
-                    return jsonify({
-                        'success': False, 
-                        'message': 'Imagen no válida. Use formatos JPG, PNG o WEBP.'
-                    })
-            except Exception as e:
-                logger.error(f"Error procesando imagen: {e}")
-                print(f"❌ DEBUG: Error procesando imagen: {e}")
-                return jsonify({
-                    'success': False, 
-                    'message': 'Error procesando la imagen'
-                })
-        
-        # Validación mejorada
-        if not query and not image_content:
-            print("❌ DEBUG: No hay query ni imagen")
-            return jsonify({
-                'success': False, 
-                'message': 'Proporciona un término de búsqueda o una imagen'
-            })
-        
-        # Si no hay query, usar uno por defecto
-        if not query:
-            query = "brake pads"
-            print(f"🔄 DEBUG: Usando query por defecto: '{query}'")
-        
-        # Información del vehículo
-        vehicle_info = None
-        if vehicle_year or vehicle_make or vehicle_model:
-            vehicle_info = {
-                'year': vehicle_year,
-                'make': vehicle_make,
-                'model': vehicle_model
-            }
-            print(f"🚗 DEBUG: Info del vehículo: {vehicle_info}")
-        
-        # Verificar que AutoPartsFinder esté disponible
-        if not auto_parts_finder:
-            print("❌ DEBUG: AutoPartsFinder no está inicializado")
-            logger.error("❌ AutoPartsFinder no está inicializado")
-            return jsonify({
-                'success': False, 
-                'message': 'Servicio de búsqueda no disponible temporalmente'
-            })
-        
-        # Realizar búsqueda
-        print(f"🔍 DEBUG: Iniciando búsqueda...")
-        logger.info(f"🔍 Iniciando búsqueda...")
-        
-        products = auto_parts_finder.search_auto_parts(
-            query=query,
-            image_content=image_content,
-            vehicle_info=vehicle_info
-        )
-        
-        print(f"📊 DEBUG: Resultados obtenidos: {len(products) if products else 0}")
-        logger.info(f"📊 Resultados obtenidos: {len(products) if products else 0}")
-        
-        # Verificar que tenemos resultados
-        if not products or len(products) == 0:
-            print("⚠️ DEBUG: No se obtuvieron productos, forzando resultados demo")
-            logger.warning("⚠️ No se obtuvieron productos, forzando resultados demo")
-            # Forzar resultados demo
-            products = auto_parts_finder._generate_sample_results(query, demo_mode=True)
-        
-        # Información adicional de la búsqueda
-        search_info = {
-            'query': query,
-            'has_image': bool(image_content),
-            'vehicle': None,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        if vehicle_info and any(vehicle_info.values()):
-            vehicle_parts = [p for p in [vehicle_info.get('year'), 
-                           vehicle_info.get('make', '').title(), 
-                           vehicle_info.get('model', '').upper()] if p]
-            search_info['vehicle'] = ' '.join(vehicle_parts)
-        
-        print(f"✅ DEBUG: Respuesta exitosa con {len(products)} productos")
-        logger.info(f"✅ Respuesta exitosa con {len(products)} productos")
-        
-        return jsonify({
-            'success': True,
-            'products': products,
-            'search_info': search_info,
-            'count': len(products)
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Error en búsqueda pública: {e}")
-        print(f"❌ DEBUG: Error en búsqueda pública: {e}")
-        return jsonify({
-            'success': False, 
-            'message': f'Error interno del servidor: {str(e)}'
-        })
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+    print("✅ Gemini disponible")
+except ImportError:
+    genai = None
+    GEMINI_AVAILABLE = False
+    print("⚠ Gemini no disponible")
 
-@app.route('/api/search-parts', methods=['POST'])
-@login_required
-def api_search_parts():
-    """API de búsqueda para usuarios autenticados"""
-    try:
-        query = request.form.get('query', '').strip()
-        
-        print(f"🔍 DEBUG: Búsqueda premium - Query: '{query}'")
-        
-        if not query:
-            return jsonify({
-                'success': False, 
-                'message': 'Término de búsqueda requerido'
-            })
-        
-        if not auto_parts_finder:
-            print("❌ DEBUG: AutoPartsFinder no disponible")
-            return jsonify({
-                'success': False, 
-                'message': 'Servicio no disponible'
-            })
-        
-        products = auto_parts_finder.search_auto_parts(query=query)
-        
-        print(f"✅ DEBUG: Búsqueda premium completada - {len(products)} productos")
-        
-        return jsonify({
-            'success': True,
-            'products': products,
-            'count': len(products),
-            'premium': True
-        })
-        
-    except Exception as e:
-        logger.error(f"Error en búsqueda autenticada: {e}")
-        print(f"❌ DEBUG: Error en búsqueda autenticada: {e}")
-        return jsonify({
-            'success': False, 
-            'message': 'Error interno del servidor'
-        })
+try:
+    from bs4 import BeautifulSoup
+    BS4_AVAILABLE = True
+    print("✅ BeautifulSoup4 disponible")
+except ImportError:
+    BS4_AVAILABLE = False
+    print("⚠ BeautifulSoup4 no disponible")
 
-# ==============================================================================
-# MANEJADORES DE ERRORES
-# ==============================================================================
+# Configuración de logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-@app.errorhandler(404)
-def not_found(error):
-    """Página no encontrada"""
-    content = '''
-    <div class="container">
-        <h1>🚫 Página No Encontrada</h1>
-        <div class="subtitle">Error 404</div>
-        <div style="text-align: center; margin: 40px 0;">
-            <p style="color: #666; margin-bottom: 30px;">La página que buscas no existe o ha sido movida.</p>
-            <a href="/" style="background: #1e3c72; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: 600;">
-                🏠 Volver al Inicio
-            </a>
-        </div>
-    </div>
-    '''
-    return render_page("Página No Encontrada - Auto Parts Finder", content), 404
-
-@app.errorhandler(500)
-def internal_error(error):
-    """Error interno del servidor"""
-    content = '''
-    <div class="container">
-        <h1>⚠ Error Interno</h1>
-        <div class="subtitle">Error 500</div>
-        <div style="text-align: center; margin: 40px 0;">
-            <p style="color: #666; margin-bottom: 30px;">Ha ocurrido un error interno en el servidor. Nuestro equipo ha sido notificado.</p>
-            <a href="/" style="background: #1e3c72; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: 600;">
-                🔄 Reintentar
-            </a>
-        </div>
-    </div>
-    '''
-    return render_page("Error Interno - Auto Parts Finder", content), 500
-
-@app.errorhandler(Exception)
-def handle_exception(e):
-    """Manejador de excepciones generales"""
-    logger.error(f"Excepción no manejada: {e}")
-    content = '''
-    <div class="container">
-        <h1>❌ Error Inesperado</h1>
-        <div class="subtitle">Algo salió mal</div>
-        <div style="text-align: center; margin: 40px 0;">
-            <p style="color: #666; margin-bottom: 30px;">Ha ocurrido un error inesperado. Por favor intenta nuevamente.</p>
-            <a href="/" style="background: #1e3c72; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: 600;">
-                🏠 Volver al Inicio
-            </a>
-        </div>
-    </div>
-    '''
-    return render_page("Error - Auto Parts Finder", content), 500
-
-# ==============================================================================
-# INICIALIZACIÓN SEGURA DE COMPONENTES
-# ==============================================================================
-
-def initialize_components():
-    """Inicializar todos los componentes de la aplicación de forma segura"""
-    global firebase_auth, auto_parts_finder
+# Función para debug de variables de entorno
+def debug_environment():
+    """Debug completo de variables de entorno"""
+    print("=" * 50)
+    print("🔍 DEBUG: ANÁLISIS DE VARIABLES DE ENTORNO")
+    print("=" * 50)
     
-    # Inicializar Firebase Auth
-    try:
-        firebase_auth = FirebaseAuth()
-        logger.info("✅ FirebaseAuth inicializado correctamente")
-        print("✅ DEBUG: FirebaseAuth inicializado")
-    except Exception as e:
-        logger.error(f"❌ Error inicializando FirebaseAuth: {e}")
-        print(f"❌ DEBUG: Error en FirebaseAuth: {e}")
-        firebase_auth = None
-    
-    # Inicializar AutoPartsFinder
-    try:
-        auto_parts_finder = AutoPartsFinder()
-        logger.info("✅ AutoPartsFinder inicializado correctamente")
-        print("✅ DEBUG: AutoPartsFinder inicializado")
-    except Exception as e:
-        logger.error(f"❌ Error inicializando AutoPartsFinder: {e}")
-        print(f"❌ DEBUG: Error en AutoPartsFinder: {e}")
-        auto_parts_finder = None
-
-# Inicializar componentes al importar
-initialize_components()
-
-# ==============================================================================
-# PUNTO DE ENTRADA PRINCIPAL
-# ==============================================================================
-
-if __name__ == '__main__':
-    print("=" * 70)
-    print("🔧 AUTO PARTS FINDER USA - SISTEMA DE REPUESTOS AUTOMOTRICES")
-    print("=" * 70)
-    
-    # Información del sistema
-    port = int(os.environ.get('PORT', 5000))
-    debug_mode = os.environ.get('FLASK_ENV') == 'development'
-    
-    print(f"🌐 Puerto: {port}")
-    print(f"🔧 Modo Debug: {debug_mode}")
-    print(f"🖼  PIL (imágenes): {'✅ Disponible' if PIL_AVAILABLE else '❌ No disponible'}")
-    print(f"🤖 Gemini AI: {'✅ Disponible' if GEMINI_AVAILABLE else '❌ No disponible'}")
-    print(f"🕷  BeautifulSoup: {'✅ Disponible' if BS4_AVAILABLE else '❌ No disponible'}")
-    print(f"🔐 Firebase Auth: {'✅ Configurado' if firebase_auth else '❌ Error'}")
-    print(f"🔍 Auto Parts Finder: {'✅ Activo' if auto_parts_finder else '❌ Error'}")
-    
-    # Estado de SerpAPI
+    # Verificar SERPAPI_KEY específicamente
     serpapi_key = os.environ.get('SERPAPI_KEY')
     if serpapi_key:
-        print(f"🔑 SerpAPI: ✅ Configurado (key: ...{serpapi_key[-8:]})")
-        print("   ➡️ Mostrará resultados REALES de tiendas")
+        print(f"✅ SERPAPI_KEY encontrada: {serpapi_key[:4]}...{serpapi_key[-4:]}")
+        print(f"✅ Longitud de la key: {len(serpapi_key)} caracteres")
+        print(f"✅ Tipo: {type(serpapi_key)}")
+        print(f"✅ Válida (no vacía): {bool(serpapi_key.strip())}")
     else:
-        print("🔑 SerpAPI: ⚠️ NO CONFIGURADO")
-        print("   ➡️ Mostrará resultados DEMO")
-        print("   💡 Configure SERPAPI_KEY para resultados reales")
+        print("❌ SERPAPI_KEY no encontrada")
     
-    print("=" * 70)
-    print("🚀 Iniciando servidor...")
-    print("📝 Credenciales demo: admin@test.com / password123")
-    print("🔗 Página principal: http://localhost:5000")
-    print("💡 Para debugging: Revisa la consola del navegador (F12)")
-    print("=" * 70)
+    # Buscar todas las variables relacionadas con API
+    print("\n🔍 Variables que contienen 'API' o 'SERP':")
+    api_vars = []
+    for key, value in os.environ.items():
+        if 'SERP' in key.upper() or 'API' in key.upper():
+            masked = value[:4] + '...' + value[-4:] if len(value) > 8 else '***'
+            print(f"   {key} = {masked}")
+            api_vars.append(key)
     
+    if not api_vars:
+        print("   (No se encontraron variables relacionadas)")
+    
+    print(f"\n📊 Total de variables de entorno: {len(os.environ)}")
+    print("=" * 50)
+
+# Llamar debug al inicio
+debug_environment()
+
+# Inicializar Flask app
+app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'auto-parts-finder-secret-key-2025')
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SECURE'] = True if os.environ.get('RENDER') else False
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
+
+# Base de datos de vehículos populares en USA
+VEHICLE_DATABASE = {
+    'makes': {
+        'chevrolet': ['silverado', 'equinox', 'malibu', 'tahoe', 'suburban', 'traverse', 'camaro', 'corvette'],
+        'ford': ['f150', 'f250', 'f350', 'escape', 'explorer', 'mustang', 'edge', 'expedition'],
+        'toyota': ['camry', 'corolla', 'rav4', 'highlander', 'prius', 'tacoma', 'tundra', 'sienna'],
+        'honda': ['civic', 'accord', 'crv', 'pilot', 'odyssey', 'ridgeline', 'passport'],
+        'nissan': ['altima', 'sentra', 'rogue', 'murano', 'pathfinder', 'titan', 'frontier'],
+        'jeep': ['wrangler', 'grand cherokee', 'cherokee', 'compass', 'renegade', 'gladiator'],
+        'ram': ['1500', '2500', '3500', 'promaster'],
+        'gmc': ['sierra', 'terrain', 'acadia', 'yukon', 'canyon']
+    },
+    'years': list(range(1990, 2025)),
+    'common_parts': [
+        'brake pads', 'brake rotors', 'oil filter', 'air filter', 'spark plugs', 
+        'battery', 'alternator', 'starter', 'radiator', 'water pump'
+    ]
+}
+
+# ==============================================================================
+# CLASES PRINCIPALES
+# ==============================================================================
+
+class FirebaseAuth:
+    """Sistema de autenticación simplificado"""
+    
+    def __init__(self):
+        self.firebase_web_api_key = os.environ.get("FIREBASE_WEB_API_KEY")
+        logger.info(f"Firebase Auth configurado: {bool(self.firebase_web_api_key)}")
+    
+    def login_user(self, email, password):
+        """Login con credenciales demo para pruebas"""
+        try:
+            # Credenciales demo hardcoded para evitar dependencias
+            if email == "admin@test.com" and password == "password123":
+                return {
+                    'success': True,
+                    'message': 'Login exitoso',
+                    'user_data': {
+                        'user_id': 'demo_user_123',
+                        'email': email,
+                        'display_name': 'Demo User',
+                        'id_token': 'demo_token_12345'
+                    }
+                }
+            else:
+                return {
+                    'success': False,
+                    'message': 'Credenciales incorrectas. Use admin@test.com / password123',
+                    'user_data': None
+                }
+        except Exception as e:
+            logger.error(f"Error en login: {e}")
+            return {
+                'success': False,
+                'message': 'Error interno en autenticación',
+                'user_data': None
+            }
+    
+    def set_user_session(self, user_data):
+        """Establecer sesión de usuario"""
+        try:
+            session['user_id'] = user_data['user_id']
+            session['user_name'] = user_data['display_name']
+            session['user_email'] = user_data['email']
+            session['login_time'] = datetime.now().isoformat()
+            session.permanent = True
+        except Exception as e:
+            logger.error(f"Error estableciendo sesión: {e}")
+    
+    def clear_user_session(self):
+        """Limpiar sesión de usuario"""
+        try:
+            session.clear()
+        except Exception as e:
+            logger.error(f"Error limpiando sesión: {e}")
+    
+    def is_user_logged_in(self):
+        """Verificar si el usuario está logueado"""
+        try:
+            return 'user_id' in session and session.get('user_id') is not None
+        except Exception as e:
+            logger.error(f"Error verificando login: {e}")
+            return False
+    
+    def get_current_user(self):
+        """Obtener usuario actual"""
+        try:
+            if not self.is_user_logged_in():
+                return None
+            return {
+                'user_id': session.get('user_id'),
+                'user_name': session.get('user_name'),
+                'user_email': session.get('user_email')
+            }
+        except Exception as e:
+            logger.error(f"Error obteniendo usuario: {e}")
+            return None
+
+class AutoPartsFinder:
+    """Buscador de repuestos automotrices con SerpAPI real y debug mejorado"""
+    
+    def __init__(self):
+        print("\n🔧 INICIALIZANDO AutoPartsFinder...")
+        
+        # Intentar múltiples formas de obtener la API key
+        self.api_key = None
+        
+        # Lista de posibles nombres de variables
+        possible_keys = [
+            'SERPAPI_KEY',
+            'SERP_API_KEY', 
+            'SERPAPI_API_KEY',
+            'GOOGLE_SERPAPI_KEY',
+            'SERPENT_API_KEY'
+        ]
+        
+        print("🔍 Buscando API key en variables de entorno...")
+        for key_name in possible_keys:
+            potential_key = os.environ.get(key_name)
+            if potential_key and potential_key.strip():
+                self.api_key = potential_key.strip()
+                print(f"✅ API key encontrada en variable: '{key_name}'")
+                print(f"✅ Key: {potential_key[:4]}...{potential_key[-4:]} (longitud: {len(potential_key)})")
+                break
+            else:
+                print(f"❌ Variable '{key_name}': {'vacía' if potential_key == '' else 'no encontrada'}")
+        
+        if not self.api_key:
+            print("❌ No se encontró SERPAPI_KEY en ninguna variable")
+            print("🔍 Variables disponibles que contienen 'API' o 'SERP':")
+            for key in os.environ.keys():
+                if 'API' in key.upper() or 'SERP' in key.upper():
+                    print(f"   - {key}")
+            print("⚠️ Usando modo DEMO")
+        else:
+            print("✅ SerpAPI configurado correctamente - MODO REAL")
+        
+        self.base_url = "https://serpapi.com/search"
+        logger.info(f"SerpAPI configurado: {bool(self.api_key)}")
+        
+        # Tiendas populares de auto parts (para fallback)
+        self.stores = [
+            'AutoZone', 'Advance Auto Parts', "O'Reilly Auto Parts", 
+            'NAPA', 'RockAuto', 'Amazon Automotive'
+        ]
+        
+        print(f"🔑 AutoPartsFinder inicializado - API disponible: {bool(self.api_key)}\n")
+    
+    def search_auto_parts(self, query=None, image_content=None, vehicle_info=None):
+        """Búsqueda principal de repuestos usando SerpAPI real"""
+        try:
+            # Construir query final
+            final_query = self._build_search_query(query, vehicle_info)
+            
+            if not final_query:
+                final_query = "brake pads"
+            
+            logger.info(f"🔍 Buscando: '{final_query}'")
+            print(f"🔍 DEBUG: Query final = '{final_query}'")
+            
+            # Verificar API key nuevamente
+            if not self.api_key:
+                logger.warning("❌ SERPAPI_KEY no disponible, usando resultados demo")
+                print("⚠️ DEBUG: Sin SERPAPI_KEY, generando demos")
+                return self._generate_sample_results(final_query, demo_mode=True)
+            
+            # Hacer llamada real a SerpAPI
+            print("🚀 DEBUG: Llamando a SerpAPI con API key real...")
+            return self._search_with_serpapi(final_query)
+            
+        except Exception as e:
+            logger.error(f"❌ Error en búsqueda: {e}")
+            print(f"❌ DEBUG: Error en search_auto_parts = {e}")
+            # En caso de error, devolver resultados demo como fallback
+            return self._generate_sample_results(query or "brake pads", demo_mode=True)
+    
+    def _search_with_serpapi(self, query):
+        """Realizar búsqueda real usando SerpAPI"""
+        try:
+            # Parámetros para SerpAPI (Google Shopping)
+            params = {
+                'api_key': self.api_key,
+                'engine': 'google_shopping',
+                'q': query + ' auto parts',
+                'location': 'United States',
+                'hl': 'en',
+                'gl': 'us',
+                'num': 20
+            }
+            
+            logger.info(f"🔍 Llamando a SerpAPI con query: {params['q']}")
+            print(f"🌐 DEBUG: Haciendo petición REAL a SerpAPI...")
+            print(f"🔑 DEBUG: Usando API key: {self.api_key[:4]}...{self.api_key[-4:]}")
+            
+            # Hacer petición HTTP con timeout
+            response = requests.get(self.base_url, params=params, timeout=15)
+            print(f"📊 DEBUG: Status HTTP: {response.status_code}")
+            
+            response.raise_for_status()
+            
+            data = response.json()
+            print(f"📊 DEBUG: Respuesta de SerpAPI recibida")
+            
+            # Verificar si hay error en la respuesta
+            if 'error' in data:
+                logger.error(f"❌ Error de SerpAPI: {data['error']}")
+                print(f"❌ DEBUG: Error en SerpAPI = {data['error']}")
+                return self._generate_sample_results(query, demo_mode=True)
+            
+            # Procesar resultados reales
+            shopping_results = data.get('shopping_results', [])
+            print(f"📊 DEBUG: {len(shopping_results)} resultados REALES de shopping")
+            
+            if not shopping_results:
+                logger.warning("⚠️ No se encontraron resultados en SerpAPI")
+                print("⚠️ DEBUG: Sin resultados en SerpAPI, usando demos")
+                return self._generate_sample_results(query, demo_mode=True)
+            
+            # Convertir a formato interno
+            processed_results = []
+            for item in shopping_results[:12]:
+                processed_item = self._process_serpapi_result(item)
+                if processed_item:
+                    processed_results.append(processed_item)
+            
+            print(f"✅ DEBUG: {len(processed_results)} resultados REALES procesados")
+            
+            if len(processed_results) == 0:
+                print("⚠️ DEBUG: No se procesaron resultados válidos, usando demos")
+                return self._generate_sample_results(query, demo_mode=True)
+            
+            logger.info(f"✅ Procesados {len(processed_results)} resultados REALES de SerpAPI")
+            return processed_results
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Error de conexión con SerpAPI: {e}")
+            print(f"❌ DEBUG: Error de conexión = {e}")
+            return self._generate_sample_results(query, demo_mode=True)
+        except requests.exceptions.Timeout:
+            logger.error("❌ Timeout en SerpAPI")
+            print("❌ DEBUG: Timeout en SerpAPI")
+            return self._generate_sample_results(query, demo_mode=True)
+        except Exception as e:
+            logger.error(f"❌ Error inesperado en SerpAPI: {e}")
+            print(f"❌ DEBUG: Error inesperado = {e}")
+            return self._generate_sample_results(query, demo_mode=True)
+
+    def _process_serpapi_result(self, item):
+        """Procesar un resultado individual de SerpAPI"""
+        try:
+            # Extraer datos verificados directamente de SerpAPI
+            title = item.get('title', 'Producto sin título').strip()
+            price = item.get('price', 'Precio no disponible')
+            source = item.get('source', 'Tienda desconocida')
+            link = item.get('link', '#')
+            
+            # ✅ VALIDAR QUE EL LINK SEA REAL DE SERPAPI
+            if not link or link == '#':
+                logger.warning(f"⚠️ Link inválido encontrado para: {title}")
+                return None
+            
+            # Limpiar y validar precio
+            price_numeric = 0.0
+            if price and price != 'Precio no disponible':
+                try:
+                    # Extraer número del precio
+                    price_clean = re.sub(r'[^\d\.]', '', str(price))
+                    if price_clean:
+                        price_numeric = float(price_clean)
+                except Exception as e:
+                    logger.debug(f"No se pudo parsear precio: {price}")
+                    price_numeric = 0.0
+            
+            # Extraer rating y reviews si existen
+            rating = item.get('rating', '')
+            reviews = item.get('reviews', '')
+            
+            # Detectar tipo de repuesto basado en el título
+            part_type = 'Aftermarket'
+            title_lower = title.lower()
+            if any(oem_word in title_lower for oem_word in ['oem', 'original', 'genuine', 'factory']):
+                part_type = 'OEM'
+            
+            return {
+                'title': title,
+                'price': price,
+                'price_numeric': price_numeric,
+                'source': source,
+                'link': link,  # ✅ LINK REAL DIRECTO DE SERPAPI
+                'rating': rating,
+                'reviews': reviews,
+                'part_type': part_type,
+                'search_source': 'serpapi_real',
+                'serpapi_verified': True  # ✅ MARCADO COMO VERIFICADO
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error procesando resultado SerpAPI: {e}")
+            return None
+
+    def _generate_sample_results(self, query, demo_mode=False):
+        """Generar resultados de ejemplo GARANTIZADOS - NUNCA falla"""
+        try:
+            # Asegurar que query no esté vacío
+            if not query or query.strip() == "":
+                query = "auto parts"
+            
+            print(f"🎭 DEBUG: Generando resultados demo para '{query}'")
+            
+            results = []
+            base_prices = [29.99, 45.99, 67.99, 89.99, 124.99, 199.99]
+            
+            # Partes específicas basadas en query común
+            part_types = ['brake pads', 'oil filter', 'air filter', 'spark plugs', 'battery', 'alternator']
+            
+            for i in range(6):
+                store = self.stores[i % len(self.stores)]
+                price = base_prices[i]
+                
+                # Usar parte específica si está en la lista, sino usar query
+                part_name = part_types[i] if 'part' in query.lower() else query
+                
+                result = {
+                    'title': f'{part_name.title()} - {"Premium OEM" if i % 2 == 0 else "Aftermarket Quality"}',
+                    'price': f'${price:.2f}',
+                    'price_numeric': price,
+                    'source': store,
+                    'link': f"https://www.google.com/search?tbm=shop&q={quote_plus(part_name + ' ' + store)}",
+                    'rating': f"{4.0 + (i * 0.1):.1f}",
+                    'reviews': str(100 + i * 50),
+                    'part_type': 'OEM' if i % 2 == 0 else 'Aftermarket',
+                    'search_source': 'demo',
+                    'serpapi_verified': False,  # ✅ MARCADO COMO NO VERIFICADO
+                    'demo_mode': demo_mode
+                }
+                results.append(result)
+            
+            print(f"✅ DEBUG: Generados {len(results)} resultados demo exitosamente")
+            logger.info(f"✅ Generados {len(results)} resultados demo para: {query}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ Error generando ejemplos: {e}")
+            print(f"❌ DEBUG: Error en _generate_sample_results = {e}")
+            
+            # ÚLTIMO RECURSO - resultado básico garantizado
+            return [{
+                'title': f'Repuesto para: {query}',
+                'price': '$50.00',
+                'price_numeric': 50.0,
+                'source': 'AutoZone',
+                'link': f"https://www.google.com/search?tbm=shop&q={quote_plus(query)}",
+                'rating': '4.5',
+                'reviews': '250',
+                'part_type': 'Demo',
+                'search_source': 'demo',
+                'serpapi_verified': False,
+                'demo_mode': True
+            }]
+
+    def _generate_error_fallback(self, error_message):
+        """Generar mensaje de error cuando falla la API"""
+        return [{
+            'title': '❌ Error en la búsqueda de repuestos',
+            'price': 'N/A',
+            'price_numeric': 0.0,
+            'source': 'Sistema - Error',
+            'link': '/',
+            'rating': '',
+            'reviews': '',
+            'part_type': 'Error',
+            'search_source': 'error',
+            'error_message': error_message,
+            'serpapi_verified': False
+        }]
+
+    def _generate_no_results_message(self, query):
+        """Generar mensaje cuando no hay resultados en SerpAPI"""
+        return [{
+            'title': f'No se encontraron repuestos para: "{query}"',
+            'price': 'N/A',
+            'price_numeric': 0.0,
+            'source': 'Sistema - Sin resultados',
+            'link': f"https://www.google.com/search?tbm=shop&q={quote_plus(query + ' auto parts')}",
+            'rating': '',
+            'reviews': '',
+            'part_type': 'Info',
+            'search_source': 'no_results',
+            'serpapi_verified': False
+        }]
+
+    def _build_search_query(self, query, vehicle_info):
+        """Construir query de búsqueda optimizada"""
+        try:
+            parts = []
+            
+            # Agregar información del vehículo si existe
+            if vehicle_info:
+                if vehicle_info.get('year'):
+                    parts.append(str(vehicle_info['year']))
+                if vehicle_info.get('make'):
+                    parts.append(vehicle_info['make'].lower())
+                if vehicle_info.get('model'):
+                    parts.append(vehicle_info['model'].lower())
+            
+            # Agregar query del usuario
+            if query and query.strip():
+                parts.append(query.strip())
+            
+            # Si no hay nada, usar término genérico
+            if not parts:
+                final_query = "brake pads"
+            else:
+                final_query = ' '.join(parts).strip()
+            
+            print(f"🔍 DEBUG: Query construida = '{final_query}'")
+            logger.info(f"🔍 Query construida: '{final_query}'")
+            return final_query
+            
+        except Exception as e:
+            logger.error(f"❌ Error construyendo query: {e}")
+            print(f"❌ DEBUG: Error en _build_search_query = {e}")
+            return "brake pads"  # Fallback garantizado
+
+# ==============================================================================
+# FUNCIONES AUXILIARES
+# ==============================================================================
+
+def login_required(f):
+    """Decorador para requerir login"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        try:
+            if not firebase_auth or not firebase_auth.is_user_logged_in():
+                flash('Debes iniciar sesión para acceder a esta página.', 'warning')
+                return redirect(url_for('auth_login_page'))
+            return f(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"Error en login_required: {e}")
+            return redirect(url_for('auth_login_page'))
+    return decorated_function
+
+def validate_image(image_content):
+    """Validar imagen subida"""
+    if not PIL_AVAILABLE or not image_content:
+        return False
     try:
-        app.run(
-            host='0.0.0.0', 
-            port=port, 
-            debug=debug_mode,
-            use_reloader=debug_mode
-        )
+        image = Image.open(io.BytesIO(image_content))
+        return image.size[0] > 10 and image.size[1] > 10
     except Exception as e:
-        logger.error(f"❌ Error crítico iniciando la aplicación: {e}")
-        print(f"\n❌ ERROR CRÍTICO: {e}")
-        print("💡 Verificaciones:")
-        print("   - Puerto disponible")
-        print("   - Permisos de red")
-        print("   - Variables de entorno")
-        print("   - Dependencias instaladas")
-        if not serpapi_key:
-            print("   - Configure SERPAPI_KEY para resultados reales")
+        logger.error(f"Error validando imagen: {e}")
+        return False
+
+def render_page(title, content):
+    """Renderizar página con template base"""
+    template = f'''<!DOCTYPE html>
+<html lang="es">
+<head>
+    <title>{html.escape(title)}</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; 
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); 
+            min-height: 100vh; 
+            padding: 15px; 
+        }}
+        .container {{ 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background: white; 
+            padding: 30px; 
+            border-radius: 12px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2); 
+        }}
+        h1 {{ color: #1e3c72; text-align: center; margin-bottom: 10px; font-size: 2.2em; }}
+        .subtitle {{ text-align: center; color: #666; margin-bottom: 30px; font-size: 1.1em; }}
+        input, select {{ 
+            width: 100%; 
+            padding: 14px; 
+            margin: 10px 0; 
+            border: 2px solid #e1e5e9; 
+            border-radius: 8px; 
+            font-size: 16px; 
+            transition: border-color 0.3s;
+        }}
+        input:focus, select:focus {{ outline: none; border-color: #1e3c72; }}
+        button {{ 
+            background: #1e3c72; 
+            color: white; 
+            border: none; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            font-size: 16px; 
+            font-weight: 600; 
+            padding: 14px 24px; 
+            transition: background-color 0.3s;
+        }}
+        button:hover {{ background: #2a5298; }}
+        .search-bar {{ display: flex; gap: 12px; margin-bottom: 25px; }}
+        .search-bar input {{ flex: 1; margin: 0; }}
+        .search-bar button {{ margin: 0; }}
+        .vehicle-form {{ 
+            background: #f8f9fa; 
+            padding: 25px; 
+            border-radius: 10px; 
+            margin: 20px 0; 
+            border: 1px solid #dee2e6;
+        }}
+        .vehicle-row {{ 
+            display: grid; 
+            grid-template-columns: 1fr 1fr 1fr; 
+            gap: 15px; 
+            margin-bottom: 15px; 
+        }}
+        .tips {{ 
+            background: #e8f4f8; 
+            border-left: 4px solid #1e3c72; 
+            padding: 20px; 
+            border-radius: 6px; 
+            margin-bottom: 20px; 
+            font-size: 14px; 
+        }}
+        .error {{ 
+            background: #ffebee; 
+            color: #c62828; 
+            padding: 15px; 
+            border-radius: 8px; 
+            margin: 15px 0; 
+            display: none; 
+            border-left: 4px solid #d32f2f;
+        }}
+        .loading {{ 
+            text-align: center; 
+            padding: 40px; 
+            display: none; 
+        }}
+        .spinner {{ 
+            border: 4px solid #f3f3f3; 
+            border-top: 4px solid #1e3c72; 
+            border-radius: 50%; 
+            width: 50px; 
+            height: 50px; 
+            animation: spin 1s linear infinite; 
+            margin: 0 auto 20px; 
+        }}
+        @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
+        .user-info {{ 
+            background: #e3f2fd; 
+            padding: 15px; 
+            border-radius: 8px; 
+            margin-bottom: 20px; 
+            text-align: center; 
+            font-weight: 500;
+        }}
+        .user-info a {{ color: #1976d2; text-decoration: none; font-weight: 600; }}
+        .user-info a:hover {{ text-decoration: underline; }}
+        .image-upload {{ 
+            background: #f8f9fa; 
+            border: 3px dashed #dee2e6; 
+            border-radius: 10px; 
+            padding: 30px; 
+            text-align: center; 
+            margin: 20px 0; 
+            cursor: pointer; 
+            transition: all 0.3s ease;
+        }}
+        .image-upload:hover {{ border-color: #1e3c72; background: #e3f2fd; }}
+        .image-upload input[type="file"] {{ display: none; }}
+        .or-divider {{ 
+            text-align: center; 
+            margin: 25px 0; 
+            color: #666; 
+            font-weight: 600; 
+            position: relative; 
+        }}
+        .or-divider:before {{ 
+            content: ''; 
+            position: absolute; 
+            top: 50%; 
+            left: 0; 
+            right: 0; 
+            height: 1px; 
+            background: #dee2e6; 
+            z-index: 1; 
+        }}
+        .or-divider span {{ 
+            background: white; 
+            padding: 0 20px; 
+            position: relative; 
+            z-index: 2; 
+        }}
+        .part-badge {{ 
+            display: inline-block; 
+            color: white; 
+            padding: 4px 10px; 
+            border-radius: 6px; 
+            font-size: 12px; 
+            font-weight: bold; 
+            margin-left
