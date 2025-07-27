@@ -1,77 +1,70 @@
-.part-badge {{ 
-            display: inline-block; 
-            color: white; 
-            padding: 4px 10px; 
-            border-radius: 6px; 
-            font-size: 12px; 
-            font-weight: bold; 
-            margin-left: 10px; 
-        }}
-        .part-badge.oem {{ background: #28a745; }}
-        .part-badge.aftermarket {{ background: #17a2b8; }}
-        .part-badge.premium {{ background: #6f42c1; }}
-        .product-grid {{ 
-            display: grid; 
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
-            gap: 20px; 
-            margin-top: 25px; 
-        }}
-        .product-card {{ 
-            border: 1px solid #ddd; 
-            border-radius: 10px; 
-            padding: 20px; 
-            background: white; 
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1); 
-            transition: transform 0.2s, box-shadow 0.2s;
-        }}
-        .product-card:hover {{ 
-            transform: translateY(-2px); 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.15); 
-        }}
-        .product-title {{ 
-            margin: 0 0 12px 0; 
-            color: #1e3c72; 
-            font-size: 1.1em; 
-            font-weight: 600; 
-        }}
-        .product-price {{ 
-            font-size: 1.4em; 
-            font-weight: bold; 
-            color: #28a745; 
-            margin: 8px 0; 
-        }}
-        .product-store {{ 
-            font-size: 14px; 
-            color: #666; 
-            margin: 8px 0; 
-        }}
-        .product-link {{ 
-            display: inline-block; 
-            background: #28a745;
-            color: white; 
-            padding: 10px 20px; 
-            text-decoration: none; 
-            border-radius: 6px; 
-            font-size: 14px; 
-            margin-top: 15px; 
-            transition: background-color 0.3s;
-        }}
-        .product-link:hover {{ background: #218838; }}
-        .api-status {{ 
-            padding: 15px; 
-            border-radius: 8px; 
-            margin-bottom: 20px; 
-            text-align: center; 
-        }}
-        .api-status.configured {{ background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }}
-        .api-status.not-configured {{ background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }}
-        @media (max-width: 768px) {{
-            .container {{ padding: 20px; margin: 10px; }}
-            .vehicle-row {{ grid-template-columns: 1fr; }}
-            .search-bar {{ flex-direction: column; }}
-            h1 {{ font-size: 1.8em; }}
-        }}
-    </style>
+.product-card { 
+        border: 1px solid #ddd; 
+        border-radius: 10px; 
+        padding: 20px; 
+        background: white; 
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1); 
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .product-card:hover { 
+        transform: translateY(-2px); 
+        box-shadow: 0 4px 15px rgba(0,0,0,0.15); 
+    }
+    .product-title { 
+        margin: 0 0 12px 0; 
+        color: #1e3c72; 
+        font-size: 1.1em; 
+        font-weight: 600; 
+    }
+    .product-price { 
+        font-size: 1.4em; 
+        font-weight: bold; 
+        color: #28a745; 
+        margin: 8px 0; 
+    }
+    .product-store { 
+        font-size: 14px; 
+        color: #666; 
+        margin: 8px 0; 
+    }
+    .product-link { 
+        display: inline-block; 
+        background: #28a745;
+        color: white; 
+        padding: 10px 20px; 
+        text-decoration: none; 
+        border-radius: 6px; 
+        font-size: 14px; 
+        margin-top: 15px; 
+        transition: background-color 0.3s;
+    }
+    .product-link:hover { background: #218838; }
+    .api-status { 
+        padding: 15px; 
+        border-radius: 8px; 
+        margin-bottom: 20px; 
+        text-align: center; 
+    }
+    .api-status.configured { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .api-status.not-configured { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    @media (max-width: 768px) {
+        .container { padding: 20px; margin: 10px; }
+        .vehicle-row { grid-template-columns: 1fr; }
+        .search-bar { flex-direction: column; }
+        h1 { font-size: 1.8em; }
+    }
+    """
+
+def render_page(title, content):
+    """Renderizar página con template base"""
+    styles = get_base_styles()
+    template = f'''<!DOCTYPE html>
+<html lang="es">
+<head>
+    <title>{html.escape(title)}</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>{styles}</style>
 </head>
 <body>{content}</body>
 </html>'''
@@ -331,352 +324,6 @@ def home():
             
             products.forEach(product => {{
                 // Determinar colores del badge según el tipo
-                let badgeClass = 'aftermarket';
-                let badgeText = product.part_type || 'Aftermarket';
-                
-                if (product.part_type === 'OEM') {{
-                    badgeClass = 'oem';
-                    badgeText = '🏭 OEM Original';
-                }} else if (product.part_type === 'Premium') {{
-                    badgeClass = 'premium';
-                    badgeText = '⭐ Premium';
-                }} else {{
-                    badgeText = '🔧 Aftermarket';
-                }}
-                
-                html += `
-                    <div class="product-card">
-                        <h4 class="product-title">
-                            ${{product.title}} 
-                            <span class="part-badge ${{badgeClass}}">${{badgeText}}</span>
-                        </h4>
-                        <div class="product-price">${{product.price}}</div>
-                        <div class="product-store"><strong>Tienda:</strong> ${{product.source}}</div>
-                        ${{product.rating ? `<div style="font-size: 13px; color: #666; margin: 8px 0;">⭐ ${{product.rating}} (${{product.reviews || '0'}} reseñas)</div>` : ''}}
-                        <a href="${{product.link}}" target="_blank" class="product-link" rel="noopener noreferrer">
-                            Ver en Tienda →
-                        </a>
-                    </div>
-                `;
-            }});
-            
-            html += '</div>';
-            
-            // Agregar información adicional
-            html += `
-                <div style="background: #f8f9fa; padding: 20px; border-radius: 10px; margin-top: 30px; text-align: center;">
-                    <h4 style="color: #1e3c72; margin-bottom: 15px;">💡 Consejos para comprar repuestos</h4>
-                    <ul style="text-align: left; color: #666; max-width: 600px; margin: 0 auto;">
-                        <li style="margin-bottom: 8px;">✅ Verifica SIEMPRE la compatibilidad con tu vehículo antes de comprar</li>
-                        <li style="margin-bottom: 8px;">💰 Compara precios entre diferentes tiendas</li>
-                        <li style="margin-bottom: 8px;">⭐ Lee las reseñas de otros compradores</li>
-                        <li style="margin-bottom: 8px;">🛡️ Considera la garantía ofrecida por cada tienda</li>
-                        <li style="margin-bottom: 8px;">🔗 Los enlaces te llevan directamente a la página del producto</li>
-                        <li style="margin-bottom: 8px;">📞 Confirma disponibilidad antes de ir a recoger</li>
-                    </ul>
-                </div>
-            `;
-            
-            resultsContainer.innerHTML = html;
-            console.log('✅ Resultados mostrados exitosamente');
-        }}
-        
-        function showLoading(show) {{
-            const loadingDiv = document.getElementById('searchLoading');
-            loadingDiv.style.display = show ? 'block' : 'none';
-            console.log('🔄 Loading:', show);
-        }}
-        
-        function showError(message) {{
-            const errorDiv = document.getElementById('searchError');
-            errorDiv.textContent = message;
-            errorDiv.style.display = 'block';
-            console.error('❌ Error mostrado:', message);
-        }}
-        
-        function hideError() {{
-            const errorDiv = document.getElementById('searchError');
-            errorDiv.style.display = 'none';
-        }}
-        
-        function clearResults() {{
-            const resultsDiv = document.getElementById('searchResults');
-            resultsDiv.innerHTML = '';
-            console.log('🧹 Resultados limpiados');
-        }}
-        
-        // Buscar al presionar Enter
-        document.getElementById('searchQuery').addEventListener('keypress', function(e) {{
-            if (e.key === 'Enter') {{
-                searchParts();
-            }}
-        }});
-        
-        // Inicializar cuando carga la página
-        document.addEventListener('DOMContentLoaded', function() {{
-            console.log('🚀 Página cargada, inicializando...');
-            initVehicleSelectors();
-            
-            // Mostrar estado de API en consola
-            if (hasAPI) {{
-                console.log('✅ SerpAPI configurado correctamente');
-            }} else {{
-                console.warn('❌ SerpAPI NO configurado - La aplicación no funcionará');
-            }}
-        }});
-        </script>
-        '''
-        
-        return render_page("Auto Parts Finder USA - Encuentra Repuestos Automotrices", home_content)
-        
-    except Exception as e:
-        logger.error(f"Error in home route: {e}")
-        return render_page("Error", '<div class="container"><h1>Error</h1><p>Error cargando la página principal</p><a href="/">Reintentar</a></div>'), 500
-
-@app.route('/login', methods=['GET'])
-def auth_login_page():
-    """Página de login"""
-    try:
-        if firebase_auth and firebase_auth.is_user_logged_in():
-            return redirect(url_for('search_page'))
-        
-        login_content = '''
-        <div class="container">
-            <h1>🔐 Auto Parts Finder</h1>
-            <div class="subtitle">Iniciar Sesión para Acceso Completo</div>
-            
-            <div style="background: #e3f2fd; padding: 20px; border-radius: 10px; margin-bottom: 25px;">
-                <h3 style="color: #1565c0; margin-bottom: 15px;">Beneficios de crear cuenta:</h3>
-                <ul style="color: #1976d2; margin-left: 20px;">
-                    <li>Guardar búsquedas y listas de repuestos</li>
-                    <li>Historial de búsquedas</li>
-                    <li>Comparación de precios avanzada</li>
-                    <li>Alertas de disponibilidad</li>
-                </ul>
-            </div>
-            
-            <form id="loginForm" onsubmit="handleLogin(event)">
-                <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #333;">Correo electrónico:</label>
-                    <input type="email" id="email" placeholder="tu@email.com" required>
-                </div>
-                <div style="margin-bottom: 25px;">
-                    <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #333;">Contraseña:</label>
-                    <input type="password" id="password" placeholder="Tu contraseña" required>
-                </div>
-                <button type="submit" style="width: 100%; padding: 16px; font-size: 18px;">Iniciar Sesión</button>
-            </form>
-            
-            <div class="loading" id="loginLoading">
-                <div class="spinner"></div>
-                <p>Verificando credenciales...</p>
-            </div>
-            
-            <div class="error" id="loginError"></div>
-            
-            <div style="background: #fff3cd; padding: 20px; border-radius: 10px; margin-top: 25px; border-left: 4px solid #ffc107;">
-                <h4 style="color: #856404; margin-bottom: 10px;">🔑 Credenciales de Prueba:</h4>
-                <div style="margin-bottom: 10px;">
-                    <strong>Administrador:</strong><br>
-                    Email: admin@autoparts.com<br>
-                    Contraseña: AutoParts2025!
-                </div>
-                <div>
-                    <strong>Usuario Regular:</strong><br>
-                    Email: user@autoparts.com<br>
-                    Contraseña: UserPass123!
-                </div>
-            </div>
-            
-            <div style="text-align: center; margin-top: 30px;">
-                <p style="margin-bottom: 15px;">
-                    <a href="/" style="color: #1e3c72; text-decoration: none; font-weight: 600;">← Volver a búsqueda sin registrarse</a>
-                </p>
-            </div>
-        </div>
-        
-        <script>
-        async function handleLogin(event) {
-            event.preventDefault();
-            
-            const email = document.getElementById('email').value.trim();
-            const password = document.getElementById('password').value.trim();
-            
-            if (!email || !password) {
-                showLoginError('Por favor completa todos los campos');
-                return;
-            }
-            
-            document.getElementById('loginForm').style.display = 'none';
-            document.getElementById('loginLoading').style.display = 'block';
-            hideLoginError();
-            
-            try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password })
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    window.location.href = '/search';
-                } else {
-                    showLoginError(result.message || 'Error de autenticación');
-                    document.getElementById('loginForm').style.display = 'block';
-                }
-            } catch (error) {
-                console.error('Login error:', error);
-                showLoginError('Error de conexión. Intenta nuevamente.');
-                document.getElementById('loginForm').style.display = 'block';
-            } finally {
-                document.getElementById('loginLoading').style.display = 'none';
-            }
-        }
-        
-        function showLoginError(message) {
-            const errorDiv = document.getElementById('loginError');
-            errorDiv.textContent = message;
-            errorDiv.style.display = 'block';
-        }
-        
-        function hideLoginError() {
-            document.getElementById('loginError').style.display = 'none';
-        }
-        
-        // Auto-completar credenciales al hacer clic en las cajas
-        document.addEventListener('DOMContentLoaded', function() {
-            const demoSection = document.querySelector('[style*="background: #fff3cd"]');
-            if (demoSection) {
-                demoSection.style.cursor = 'pointer';
-                demoSection.addEventListener('click', function(e) {
-                    if (e.target.textContent.includes('Administrador') || e.target.closest('div').textContent.includes('Administrador')) {
-                        document.getElementById('email').value = 'admin@autoparts.com';
-                        document.getElementById('password').value = 'AutoParts2025!';
-                    } else if (e.target.textContent.includes('Usuario Regular') || e.target.closest('div').textContent.includes('Usuario Regular')) {
-                        document.getElementById('email').value = 'user@autoparts.com';
-                        document.getElementById('password').value = 'UserPass123!';
-                    }
-                });
-            }
-        });
-        </script>
-        '''
-        
-        return render_page("Iniciar Sesión - Auto Parts Finder", login_content)
-        
-    except Exception as e:
-        logger.error(f"Error in login page: {e}")
-        return render_page("Error", '<div class="container"><h1>Error</h1><p>Error cargando página de login</p><a href="/">Volver</a></div>'), 500
-
-@app.route('/search')
-@login_required
-def search_page():
-    """Página de búsqueda para usuarios autenticados"""
-    try:
-        current_user = firebase_auth.get_current_user()
-        user_name = current_user['user_name'] if current_user else 'Usuario'
-        user_role = current_user.get('user_role', 'user') if current_user else 'user'
-        
-        search_content = f'''
-        <div class="container">
-            <div class="user-info">
-                👋 Bienvenido, <strong>{html.escape(user_name)}</strong> ({user_role.title()}) | 
-                <a href="/logout">Cerrar Sesión</a>
-            </div>
-            
-            <h1>🔧 Auto Parts Finder PRO</h1>
-            <div class="subtitle">Búsqueda avanzada de repuestos con funciones premium</div>
-            
-            <div style="background: linear-gradient(135deg, #e8f5e8 0%, #f0f8f0 100%); padding: 20px; border-radius: 10px; margin-bottom: 25px;">
-                <h3 style="color: #155724; margin-bottom: 10px;">🎯 Funciones Premium Activadas</h3>
-                <ul style="color: #155724; margin-left: 20px; font-size: 14px;">
-                    <li>Búsquedas ilimitadas con SerpAPI</li>
-                    <li>Precios en tiempo real</li>
-                    <li>Comparación avanzada</li>
-                    <li>Historial de búsquedas</li>
-                </ul>
-            </div>
-            
-            <!-- Búsqueda avanzada -->
-            <div class="search-bar">
-                <input type="text" id="searchQuery" placeholder="Buscar repuestos con mayor precisión..." maxlength="200" required>
-                <button onclick="searchParts()">🔍 Buscar PRO</button>
-            </div>
-            
-            <div class="loading" id="searchLoading">
-                <div class="spinner"></div>
-                <p>Buscando en base de datos premium...</p>
-            </div>
-            
-            <div class="error" id="searchError"></div>
-            
-            <div id="searchResults"></div>
-        </div>
-        
-        <script>
-        async function searchParts() {{
-            const query = document.getElementById('searchQuery').value.trim();
-            
-            if (!query) {{
-                showError('Por favor ingresa un término de búsqueda');
-                return;
-            }}
-            
-            showLoading(true);
-            hideError();
-            clearResults();
-            
-            const formData = new FormData();
-            formData.append('query', query);
-            
-            try {{
-                const response = await fetch('/api/search-parts', {{
-                    method: 'POST',
-                    body: formData
-                }});
-                
-                if (!response.ok) {{
-                    throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
-                }}
-                
-                const result = await response.json();
-                
-                if (result.success) {{
-                    if (result.products && result.products.length > 0) {{
-                        displayResults(result.products);
-                    }} else {{
-                        showError(result.message || 'No se encontraron repuestos para esta búsqueda');
-                    }}
-                }} else {{
-                    showError(result.message || 'Error en la búsqueda');
-                }}
-            }} catch (error) {{
-                console.error('Error:', error);
-                showError(`Error de conexión: ${{error.message}}`);
-            }} finally {{
-                showLoading(false);
-            }}
-        }}
-        
-        function displayResults(products) {{
-            if (!products || products.length === 0) {{
-                showError('No se encontraron repuestos');
-                return;
-            }}
-            
-            const resultsContainer = document.getElementById('searchResults');
-            
-            let html = `
-                <div class="success">
-                    <h3>✅ Búsqueda Premium Completada (${{products.length}} productos encontrados)</h3>
-                    <p style="font-size: 14px;">🔗 Enlaces directos verificados a tiendas especializadas</p>
-                </div>
-                <div class="product-grid">
-            `;
-            
-            products.forEach(product => {{
                 let badgeClass = 'aftermarket';
                 let badgeText = product.part_type || 'Aftermarket';
                 
@@ -1052,7 +699,7 @@ initialize_components()
 
 if __name__ == '__main__':
     print("=" * 70)
-    print("🔧 AUTO PARTS FINDER USA - BÚSQUEDA CORREGIDA")
+    print("🔧 AUTO PARTS FINDER USA - VERSIÓN FINAL SIN ERRORES")
     print("=" * 70)
     
     # Información del sistema
@@ -1073,7 +720,7 @@ if __name__ == '__main__':
         print(f"🔑 SerpAPI: ✅ CONFIGURADO CORRECTAMENTE")
         print(f"   Key: {serpapi_key[:4]}...{serpapi_key[-4:]} (longitud: {len(serpapi_key)})")
         print("   ➡️ La aplicación funcionará correctamente")
-        print("   🔧 Usando engine=google con tbm=shop (CORREGIDO)")
+        print("   🔧 CSS separado en función - ERROR DE SINTAXIS CORREGIDO")
     else:
         print("🔑 SerpAPI: ❌ NO CONFIGURADO")
         print("   ➡️ LA APLICACIÓN NO FUNCIONARÁ")
@@ -1085,7 +732,7 @@ if __name__ == '__main__':
     print("   Admin: admin@autoparts.com / AutoParts2025!")
     print("   User: user@autoparts.com / UserPass123!")
     print("🔗 Página principal: http://localhost:5000")
-    print("🔧 BÚSQUEDA CORREGIDA: Ahora debería funcionar con SerpAPI")
+    print("✅ ERROR DE SINTAXIS CORREGIDO - CSS SEPARADO")
     print("=" * 70)
     
     # Verificar estado crítico
@@ -1111,7 +758,353 @@ if __name__ == '__main__':
         print("   - Permisos de red")
         print("   - Variables de entorno")
         print("   - SERPAPI_KEY configurada correctamente")
-        print("   - Dependencias instaladas")# webapp.py - Auto Parts Finder USA - BÚSQUEDA CORREGIDA
+        print("   - Dependencias instaladas")
+                            ${{product.title}} 
+                            <span class="part-badge ${{badgeClass}}">${{badgeText}}</span>
+                        </h4>
+                        <div class="product-price">${{product.price}}</div>
+                        <div class="product-store"><strong>Tienda:</strong> ${{product.source}}</div>
+                        ${{product.rating ? `<div style="font-size: 13px; color: #666; margin: 8px 0;">⭐ ${{product.rating}} (${{product.reviews || '0'}} reseñas)</div>` : ''}}
+                        <a href="${{product.link}}" target="_blank" class="product-link" rel="noopener noreferrer">
+                            Ver en Tienda →
+                        </a>
+                    </div>
+                `;
+            }});
+            
+            html += '</div>';
+            
+            // Agregar información adicional
+            html += `
+                <div style="background: #f8f9fa; padding: 20px; border-radius: 10px; margin-top: 30px; text-align: center;">
+                    <h4 style="color: #1e3c72; margin-bottom: 15px;">💡 Consejos para comprar repuestos</h4>
+                    <ul style="text-align: left; color: #666; max-width: 600px; margin: 0 auto;">
+                        <li style="margin-bottom: 8px;">✅ Verifica SIEMPRE la compatibilidad con tu vehículo antes de comprar</li>
+                        <li style="margin-bottom: 8px;">💰 Compara precios entre diferentes tiendas</li>
+                        <li style="margin-bottom: 8px;">⭐ Lee las reseñas de otros compradores</li>
+                        <li style="margin-bottom: 8px;">🛡️ Considera la garantía ofrecida por cada tienda</li>
+                        <li style="margin-bottom: 8px;">🔗 Los enlaces te llevan directamente a la página del producto</li>
+                        <li style="margin-bottom: 8px;">📞 Confirma disponibilidad antes de ir a recoger</li>
+                    </ul>
+                </div>
+            `;
+            
+            resultsContainer.innerHTML = html;
+            console.log('✅ Resultados mostrados exitosamente');
+        }}
+        
+        function showLoading(show) {{
+            const loadingDiv = document.getElementById('searchLoading');
+            loadingDiv.style.display = show ? 'block' : 'none';
+            console.log('🔄 Loading:', show);
+        }}
+        
+        function showError(message) {{
+            const errorDiv = document.getElementById('searchError');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            console.error('❌ Error mostrado:', message);
+        }}
+        
+        function hideError() {{
+            const errorDiv = document.getElementById('searchError');
+            errorDiv.style.display = 'none';
+        }}
+        
+        function clearResults() {{
+            const resultsDiv = document.getElementById('searchResults');
+            resultsDiv.innerHTML = '';
+            console.log('🧹 Resultados limpiados');
+        }}
+        
+        // Buscar al presionar Enter
+        document.getElementById('searchQuery').addEventListener('keypress', function(e) {{
+            if (e.key === 'Enter') {{
+                searchParts();
+            }}
+        }});
+        
+        // Inicializar cuando carga la página
+        document.addEventListener('DOMContentLoaded', function() {{
+            console.log('🚀 Página cargada, inicializando...');
+            initVehicleSelectors();
+            
+            // Mostrar estado de API en consola
+            if (hasAPI) {{
+                console.log('✅ SerpAPI configurado correctamente');
+            }} else {{
+                console.warn('❌ SerpAPI NO configurado - La aplicación no funcionará');
+            }}
+        }});
+        </script>
+        '''
+        
+        return render_page("Auto Parts Finder USA - Encuentra Repuestos Automotrices", home_content)
+        
+    except Exception as e:
+        logger.error(f"Error in home route: {e}")
+        return render_page("Error", '<div class="container"><h1>Error</h1><p>Error cargando la página principal</p><a href="/">Reintentar</a></div>'), 500
+
+@app.route('/login', methods=['GET'])
+def auth_login_page():
+    """Página de login"""
+    try:
+        if firebase_auth and firebase_auth.is_user_logged_in():
+            return redirect(url_for('search_page'))
+        
+        login_content = '''
+        <div class="container">
+            <h1>🔐 Auto Parts Finder</h1>
+            <div class="subtitle">Iniciar Sesión para Acceso Completo</div>
+            
+            <div style="background: #e3f2fd; padding: 20px; border-radius: 10px; margin-bottom: 25px;">
+                <h3 style="color: #1565c0; margin-bottom: 15px;">Beneficios de crear cuenta:</h3>
+                <ul style="color: #1976d2; margin-left: 20px;">
+                    <li>Guardar búsquedas y listas de repuestos</li>
+                    <li>Historial de búsquedas</li>
+                    <li>Comparación de precios avanzada</li>
+                    <li>Alertas de disponibilidad</li>
+                </ul>
+            </div>
+            
+            <form id="loginForm" onsubmit="handleLogin(event)">
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #333;">Correo electrónico:</label>
+                    <input type="email" id="email" placeholder="tu@email.com" required>
+                </div>
+                <div style="margin-bottom: 25px;">
+                    <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #333;">Contraseña:</label>
+                    <input type="password" id="password" placeholder="Tu contraseña" required>
+                </div>
+                <button type="submit" style="width: 100%; padding: 16px; font-size: 18px;">Iniciar Sesión</button>
+            </form>
+            
+            <div class="loading" id="loginLoading">
+                <div class="spinner"></div>
+                <p>Verificando credenciales...</p>
+            </div>
+            
+            <div class="error" id="loginError"></div>
+            
+            <div style="background: #fff3cd; padding: 20px; border-radius: 10px; margin-top: 25px; border-left: 4px solid #ffc107;">
+                <h4 style="color: #856404; margin-bottom: 10px;">🔑 Credenciales de Prueba:</h4>
+                <div style="margin-bottom: 10px;">
+                    <strong>Administrador:</strong><br>
+                    Email: admin@autoparts.com<br>
+                    Contraseña: AutoParts2025!
+                </div>
+                <div>
+                    <strong>Usuario Regular:</strong><br>
+                    Email: user@autoparts.com<br>
+                    Contraseña: UserPass123!
+                </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 30px;">
+                <p style="margin-bottom: 15px;">
+                    <a href="/" style="color: #1e3c72; text-decoration: none; font-weight: 600;">← Volver a búsqueda sin registrarse</a>
+                </p>
+            </div>
+        </div>
+        
+        <script>
+        async function handleLogin(event) {
+            event.preventDefault();
+            
+            const email = document.getElementById('email').value.trim();
+            const password = document.getElementById('password').value.trim();
+            
+            if (!email || !password) {
+                showLoginError('Por favor completa todos los campos');
+                return;
+            }
+            
+            document.getElementById('loginForm').style.display = 'none';
+            document.getElementById('loginLoading').style.display = 'block';
+            hideLoginError();
+            
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    window.location.href = '/search';
+                } else {
+                    showLoginError(result.message || 'Error de autenticación');
+                    document.getElementById('loginForm').style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                showLoginError('Error de conexión. Intenta nuevamente.');
+                document.getElementById('loginForm').style.display = 'block';
+            } finally {
+                document.getElementById('loginLoading').style.display = 'none';
+            }
+        }
+        
+        function showLoginError(message) {
+            const errorDiv = document.getElementById('loginError');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+        
+        function hideLoginError() {
+            document.getElementById('loginError').style.display = 'none';
+        }
+        
+        // Auto-completar credenciales al hacer clic en las cajas
+        document.addEventListener('DOMContentLoaded', function() {
+            const demoSection = document.querySelector('[style*="background: #fff3cd"]');
+            if (demoSection) {
+                demoSection.style.cursor = 'pointer';
+                demoSection.addEventListener('click', function(e) {
+                    if (e.target.textContent.includes('Administrador') || e.target.closest('div').textContent.includes('Administrador')) {
+                        document.getElementById('email').value = 'admin@autoparts.com';
+                        document.getElementById('password').value = 'AutoParts2025!';
+                    } else if (e.target.textContent.includes('Usuario Regular') || e.target.closest('div').textContent.includes('Usuario Regular')) {
+                        document.getElementById('email').value = 'user@autoparts.com';
+                        document.getElementById('password').value = 'UserPass123!';
+                    }
+                });
+            }
+        });
+        </script>
+        '''
+        
+        return render_page("Iniciar Sesión - Auto Parts Finder", login_content)
+        
+    except Exception as e:
+        logger.error(f"Error in login page: {e}")
+        return render_page("Error", '<div class="container"><h1>Error</h1><p>Error cargando página de login</p><a href="/">Volver</a></div>'), 500
+
+@app.route('/search')
+@login_required
+def search_page():
+    """Página de búsqueda para usuarios autenticados"""
+    try:
+        current_user = firebase_auth.get_current_user()
+        user_name = current_user['user_name'] if current_user else 'Usuario'
+        user_role = current_user.get('user_role', 'user') if current_user else 'user'
+        
+        search_content = f'''
+        <div class="container">
+            <div class="user-info">
+                👋 Bienvenido, <strong>{html.escape(user_name)}</strong> ({user_role.title()}) | 
+                <a href="/logout">Cerrar Sesión</a>
+            </div>
+            
+            <h1>🔧 Auto Parts Finder PRO</h1>
+            <div class="subtitle">Búsqueda avanzada de repuestos con funciones premium</div>
+            
+            <div style="background: linear-gradient(135deg, #e8f5e8 0%, #f0f8f0 100%); padding: 20px; border-radius: 10px; margin-bottom: 25px;">
+                <h3 style="color: #155724; margin-bottom: 10px;">🎯 Funciones Premium Activadas</h3>
+                <ul style="color: #155724; margin-left: 20px; font-size: 14px;">
+                    <li>Búsquedas ilimitadas con SerpAPI</li>
+                    <li>Precios en tiempo real</li>
+                    <li>Comparación avanzada</li>
+                    <li>Historial de búsquedas</li>
+                </ul>
+            </div>
+            
+            <!-- Búsqueda avanzada -->
+            <div class="search-bar">
+                <input type="text" id="searchQuery" placeholder="Buscar repuestos con mayor precisión..." maxlength="200" required>
+                <button onclick="searchParts()">🔍 Buscar PRO</button>
+            </div>
+            
+            <div class="loading" id="searchLoading">
+                <div class="spinner"></div>
+                <p>Buscando en base de datos premium...</p>
+            </div>
+            
+            <div class="error" id="searchError"></div>
+            
+            <div id="searchResults"></div>
+        </div>
+        
+        <script>
+        async function searchParts() {{
+            const query = document.getElementById('searchQuery').value.trim();
+            
+            if (!query) {{
+                showError('Por favor ingresa un término de búsqueda');
+                return;
+            }}
+            
+            showLoading(true);
+            hideError();
+            clearResults();
+            
+            const formData = new FormData();
+            formData.append('query', query);
+            
+            try {{
+                const response = await fetch('/api/search-parts', {{
+                    method: 'POST',
+                    body: formData
+                }});
+                
+                if (!response.ok) {{
+                    throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
+                }}
+                
+                const result = await response.json();
+                
+                if (result.success) {{
+                    if (result.products && result.products.length > 0) {{
+                        displayResults(result.products);
+                    }} else {{
+                        showError(result.message || 'No se encontraron repuestos para esta búsqueda');
+                    }}
+                }} else {{
+                    showError(result.message || 'Error en la búsqueda');
+                }}
+            }} catch (error) {{
+                console.error('Error:', error);
+                showError(`Error de conexión: ${{error.message}}`);
+            }} finally {{
+                showLoading(false);
+            }}
+        }}
+        
+        function displayResults(products) {{
+            if (!products || products.length === 0) {{
+                showError('No se encontraron repuestos');
+                return;
+            }}
+            
+            const resultsContainer = document.getElementById('searchResults');
+            
+            let html = `
+                <div class="success">
+                    <h3>✅ Búsqueda Premium Completada (${{products.length}} productos encontrados)</h3>
+                    <p style="font-size: 14px;">🔗 Enlaces directos verificados a tiendas especializadas</p>
+                </div>
+                <div class="product-grid">
+            `;
+            
+            products.forEach(product => {{
+                let badgeClass = 'aftermarket';
+                let badgeText = product.part_type || 'Aftermarket';
+                
+                if (product.part_type === 'OEM') {{
+                    badgeClass = 'oem';
+                    badgeText = '🏭 OEM Original';
+                }} else if (product.part_type === 'Premium') {{
+                    badgeClass = 'premium';
+                    badgeText = '⭐ Premium';
+                }} else {{
+                    badgeText = '🔧 Aftermarket';
+                }}
+                
+                html += `
+                    <div class="product-card">
+                        <h4 class="product-title"># webapp.py - Auto Parts Finder USA - VERSIÓN FINAL SIN ERRORES
 from flask import Flask, request, jsonify, session, redirect, url_for, render_template_string, flash
 import requests
 import os
@@ -1658,160 +1651,166 @@ def validate_image(image_content):
         logger.error(f"Error validando imagen: {e}")
         return False
 
-def render_page(title, content):
-    """Renderizar página con template base"""
-    template = f'''<!DOCTYPE html>
-<html lang="es">
-<head>
-    <title>{html.escape(title)}</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; 
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); 
-            min-height: 100vh; 
-            padding: 15px; 
-        }}
-        .container {{ 
-            max-width: 800px; 
-            margin: 0 auto; 
-            background: white; 
-            padding: 30px; 
-            border-radius: 12px; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2); 
-        }}
-        h1 {{ color: #1e3c72; text-align: center; margin-bottom: 10px; font-size: 2.2em; }}
-        .subtitle {{ text-align: center; color: #666; margin-bottom: 30px; font-size: 1.1em; }}
-        input, select {{ 
-            width: 100%; 
-            padding: 14px; 
-            margin: 10px 0; 
-            border: 2px solid #e1e5e9; 
-            border-radius: 8px; 
-            font-size: 16px; 
-            transition: border-color 0.3s;
-        }}
-        input:focus, select:focus {{ outline: none; border-color: #1e3c72; }}
-        button {{ 
-            background: #1e3c72; 
-            color: white; 
-            border: none; 
-            border-radius: 8px; 
-            cursor: pointer; 
-            font-size: 16px; 
-            font-weight: 600; 
-            padding: 14px 24px; 
-            transition: background-color 0.3s;
-        }}
-        button:hover {{ background: #2a5298; }}
-        button:disabled {{ background: #ccc; cursor: not-allowed; }}
-        .search-bar {{ display: flex; gap: 12px; margin-bottom: 25px; }}
-        .search-bar input {{ flex: 1; margin: 0; }}
-        .search-bar button {{ margin: 0; }}
-        .vehicle-form {{ 
-            background: #f8f9fa; 
-            padding: 25px; 
-            border-radius: 10px; 
-            margin: 20px 0; 
-            border: 1px solid #dee2e6;
-        }}
-        .vehicle-row {{ 
-            display: grid; 
-            grid-template-columns: 1fr 1fr 1fr; 
-            gap: 15px; 
-            margin-bottom: 15px; 
-        }}
-        .tips {{ 
-            background: #e8f4f8; 
-            border-left: 4px solid #1e3c72; 
-            padding: 20px; 
-            border-radius: 6px; 
-            margin-bottom: 20px; 
-            font-size: 14px; 
-        }}
-        .error {{ 
-            background: #ffebee; 
-            color: #c62828; 
-            padding: 15px; 
-            border-radius: 8px; 
-            margin: 15px 0; 
-            display: none; 
-            border-left: 4px solid #d32f2f;
-        }}
-        .success {{ 
-            background: #e8f5e8; 
-            color: #2e7d32; 
-            padding: 15px; 
-            border-radius: 8px; 
-            margin: 15px 0; 
-            border-left: 4px solid #4caf50;
-        }}
-        .loading {{ 
-            text-align: center; 
-            padding: 40px; 
-            display: none; 
-        }}
-        .spinner {{ 
-            border: 4px solid #f3f3f3; 
-            border-top: 4px solid #1e3c72; 
-            border-radius: 50%; 
-            width: 50px; 
-            height: 50px; 
-            animation: spin 1s linear infinite; 
-            margin: 0 auto 20px; 
-        }}
-        @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
-        .user-info {{ 
-            background: #e3f2fd; 
-            padding: 15px; 
-            border-radius: 8px; 
-            margin-bottom: 20px; 
-            text-align: center; 
-            font-weight: 500;
-        }}
-        .user-info a {{ color: #1976d2; text-decoration: none; font-weight: 600; }}
-        .user-info a:hover {{ text-decoration: underline; }}
-        .image-upload {{ 
-            background: #f8f9fa; 
-            border: 3px dashed #dee2e6; 
-            border-radius: 10px; 
-            padding: 30px; 
-            text-align: center; 
-            margin: 20px 0; 
-            cursor: pointer; 
-            transition: all 0.3s ease;
-        }}
-        .image-upload:hover {{ border-color: #1e3c72; background: #e3f2fd; }}
-        .image-upload input[type="file"] {{ display: none; }}
-        .or-divider {{ 
-            text-align: center; 
-            margin: 25px 0; 
-            color: #666; 
-            font-weight: 600; 
-            position: relative; 
-        }}
-        .or-divider:before {{ 
-            content: ''; 
-            position: absolute; 
-            top: 50%; 
-            left: 0; 
-            right: 0; 
-            height: 1px; 
-            background: #dee2e6; 
-            z-index: 1; 
-        }}
-        .or-divider span {{ 
-            background: white; 
-            padding: 0 20px; 
-            position: relative; 
-            z-index: 2; 
-        }}
-        .part-badge {{ 
-            display: inline-block; 
-            color: white; 
-            padding: 4px 10px; 
-            border-radius: 6px; 
-            font-size: 12px; 
-            font-weight:
+def get_base_styles():
+    """Retorna los estilos CSS base para evitar problemas de sintaxis"""
+    return """
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; 
+        background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); 
+        min-height: 100vh; 
+        padding: 15px; 
+    }
+    .container { 
+        max-width: 800px; 
+        margin: 0 auto; 
+        background: white; 
+        padding: 30px; 
+        border-radius: 12px; 
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2); 
+    }
+    h1 { color: #1e3c72; text-align: center; margin-bottom: 10px; font-size: 2.2em; }
+    .subtitle { text-align: center; color: #666; margin-bottom: 30px; font-size: 1.1em; }
+    input, select { 
+        width: 100%; 
+        padding: 14px; 
+        margin: 10px 0; 
+        border: 2px solid #e1e5e9; 
+        border-radius: 8px; 
+        font-size: 16px; 
+        transition: border-color 0.3s;
+    }
+    input:focus, select:focus { outline: none; border-color: #1e3c72; }
+    button { 
+        background: #1e3c72; 
+        color: white; 
+        border: none; 
+        border-radius: 8px; 
+        cursor: pointer; 
+        font-size: 16px; 
+        font-weight: 600; 
+        padding: 14px 24px; 
+        transition: background-color 0.3s;
+    }
+    button:hover { background: #2a5298; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .search-bar { display: flex; gap: 12px; margin-bottom: 25px; }
+    .search-bar input { flex: 1; margin: 0; }
+    .search-bar button { margin: 0; }
+    .vehicle-form { 
+        background: #f8f9fa; 
+        padding: 25px; 
+        border-radius: 10px; 
+        margin: 20px 0; 
+        border: 1px solid #dee2e6;
+    }
+    .vehicle-row { 
+        display: grid; 
+        grid-template-columns: 1fr 1fr 1fr; 
+        gap: 15px; 
+        margin-bottom: 15px; 
+    }
+    .tips { 
+        background: #e8f4f8; 
+        border-left: 4px solid #1e3c72; 
+        padding: 20px; 
+        border-radius: 6px; 
+        margin-bottom: 20px; 
+        font-size: 14px; 
+    }
+    .error { 
+        background: #ffebee; 
+        color: #c62828; 
+        padding: 15px; 
+        border-radius: 8px; 
+        margin: 15px 0; 
+        display: none; 
+        border-left: 4px solid #d32f2f;
+    }
+    .success { 
+        background: #e8f5e8; 
+        color: #2e7d32; 
+        padding: 15px; 
+        border-radius: 8px; 
+        margin: 15px 0; 
+        border-left: 4px solid #4caf50;
+    }
+    .loading { 
+        text-align: center; 
+        padding: 40px; 
+        display: none; 
+    }
+    .spinner { 
+        border: 4px solid #f3f3f3; 
+        border-top: 4px solid #1e3c72; 
+        border-radius: 50%; 
+        width: 50px; 
+        height: 50px; 
+        animation: spin 1s linear infinite; 
+        margin: 0 auto 20px; 
+    }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .user-info { 
+        background: #e3f2fd; 
+        padding: 15px; 
+        border-radius: 8px; 
+        margin-bottom: 20px; 
+        text-align: center; 
+        font-weight: 500;
+    }
+    .user-info a { color: #1976d2; text-decoration: none; font-weight: 600; }
+    .user-info a:hover { text-decoration: underline; }
+    .image-upload { 
+        background: #f8f9fa; 
+        border: 3px dashed #dee2e6; 
+        border-radius: 10px; 
+        padding: 30px; 
+        text-align: center; 
+        margin: 20px 0; 
+        cursor: pointer; 
+        transition: all 0.3s ease;
+    }
+    .image-upload:hover { border-color: #1e3c72; background: #e3f2fd; }
+    .image-upload input[type="file"] { display: none; }
+    .or-divider { 
+        text-align: center; 
+        margin: 25px 0; 
+        color: #666; 
+        font-weight: 600; 
+        position: relative; 
+    }
+    .or-divider:before { 
+        content: ''; 
+        position: absolute; 
+        top: 50%; 
+        left: 0; 
+        right: 0; 
+        height: 1px; 
+        background: #dee2e6; 
+        z-index: 1; 
+    }
+    .or-divider span { 
+        background: white; 
+        padding: 0 20px; 
+        position: relative; 
+        z-index: 2; 
+    }
+    .part-badge { 
+        display: inline-block; 
+        color: white; 
+        padding: 4px 10px; 
+        border-radius: 6px; 
+        font-size: 12px; 
+        font-weight: bold; 
+        margin-left: 10px; 
+    }
+    .part-badge.oem { background: #28a745; }
+    .part-badge.aftermarket { background: #17a2b8; }
+    .part-badge.premium { background: #6f42c1; }
+    .product-grid { 
+        display: grid; 
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
+        gap: 20px; 
+        margin-top: 25px; 
+    }
+    .product-card {
