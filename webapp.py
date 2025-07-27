@@ -1,206 +1,8 @@
-.product-card { 
-        border: 1px solid #ddd; 
-        border-radius: 10px; 
-        padding: 20px; 
-        background: white; 
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1); 
-        transition: transform 0.2s, box-shadow 0.2s;
-    }
-    .product-card:hover { 
-        transform: translateY(-2px); 
-        box-shadow: 0 4px 15px rgba(0,0,0,0.15); 
-    }
-    .product-title { 
-        margin: 0 0 12px 0; 
-        color: #1e3c72; 
-        font-size: 1.1em; 
-        font-weight: 600; 
-    }
-    .product-price { 
-        font-size: 1.4em; 
-        font-weight: bold; 
-        color: #28a745; 
-        margin: 8px 0; 
-    }
-    .product-store { 
-        font-size: 14px; 
-        color: #666; 
-        margin: 8px 0; 
-    }
-    .product-link { 
-        display: inline-block; 
-        background: #28a745;
-        color: white; 
-        padding: 10px 20px; 
-        text-decoration: none; 
-        border-radius: 6px; 
-        font-size: 14px; 
-        margin-top: 15px; 
-        transition: background-color 0.3s;
-    }
-    .product-link:hover { background: #218838; }
-    .api-status { 
-        padding: 15px; 
-        border-radius: 8px; 
-        margin-bottom: 20px; 
-        text-align: center; 
-    }
-    .api-status.configured { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-    .api-status.not-configured { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-    @media (max-width: 768px) {
-        .container { padding: 20px; margin: 10px; }
-        .vehicle-row { grid-template-columns: 1fr; }
-        .search-bar { flex-direction: column; }
-        h1 { font-size: 1.8em; }
-    }
-    """
-
-def render_page(title, content):
-    """Renderizar página con template base"""
-    styles = get_base_styles()
-    template = f'''<!DOCTYPE html>
-<html lang="es">
-<head>
-    <title>{html.escape(title)}</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>{styles}</style>
-</head>
-<body>{content}</body>
-</html>'''
-    return template
-
-# ==============================================================================
-# RUTAS DE LA APLICACIÓN
-# ==============================================================================
-
-@app.route('/')
-def home():
-    """Página principal con búsqueda pública"""
-    try:
-        vehicle_data_json = json.dumps(VEHICLE_DATABASE)
-        
-        # Verificar estado de SerpAPI
-        serpapi_key = os.environ.get('SERPAPI_KEY')
-        if serpapi_key and serpapi_key.strip():
-            api_status_html = '''
-            <div class="api-status configured">
-                <strong>✅ SerpAPI Configurado</strong><br>
-                <small>Mostrando resultados reales de tiendas de repuestos</small>
-            </div>
-            '''
-        else:
-            api_status_html = '''
-            <div class="api-status not-configured">
-                <strong>❌ SerpAPI No Configurado</strong><br>
-                <small>Configure la variable de entorno SERPAPI_KEY para que la aplicación funcione</small>
-            </div>
-            '''
-        
-        home_content = f'''
-        <div class="container">
-            <h1>🔧 Auto Parts Finder USA</h1>
-            <div class="subtitle">Encuentra repuestos automotrices en las mejores tiendas de Estados Unidos</div>
-            
-            {api_status_html}
-            
-            <div class="tips">
-                💡 <strong>Consejos para mejores resultados:</strong><br>
-                • Incluye año, marca y modelo de tu vehículo<br>
-                • Usa nombres específicos como "brake pads", "oil filter", "spark plugs"<br>
-                • Sé específico: "honda civic brake pads 2018" es mejor que solo "brake pads"<br>
-                • Puedes subir una foto del repuesto para identificación visual
-            </div>
-            
-            <!-- Información del vehículo -->
-            <div class="vehicle-form">
-                <h3>🚗 Información del Vehículo (Opcional pero recomendado)</h3>
-                <div class="vehicle-row">
-                    <select id="vehicleYear">
-                        <option value="">Seleccionar año</option>
-                    </select>
-                    <select id="vehicleMake">
-                        <option value="">Seleccionar marca</option>
-                    </select>
-                    <select id="vehicleModel">
-                        <option value="">Seleccionar modelo</option>
-                    </select>
-                </div>
-            </div>
-            
-            <!-- Búsqueda por texto -->
-            <div class="search-bar">
-                <input type="text" id="searchQuery" placeholder="¿Qué repuesto necesitas? Ejemplo: brake pads, oil filter, spark plugs..." maxlength="150" required>
-                <button onclick="searchParts()">🔍 Buscar Repuestos</button>
-            </div>
-            
-            <div class="or-divider">
-                <span>O</span>
-            </div>
-            
-            <!-- Búsqueda por imagen -->
-            <div class="image-upload" onclick="document.getElementById('imageInput').click()">
-                <input type="file" id="imageInput" accept="image/*" onchange="handleImageUpload(event)">
-                <div>📷 Subir foto del repuesto para identificación automática</div>
-                <small style="color: #666; margin-top: 10px; display: block;">Formatos soportados: JPG, PNG, WEBP (máx. 16MB)</small>
-            </div>
-            
-            <div class="loading" id="searchLoading">
-                <div class="spinner"></div>
-                <p>Buscando repuestos en tiendas especializadas...</p>
-            </div>
-            
-            <div class="error" id="searchError"></div>
-            
-            <div id="searchResults"></div>
-            
-            <!-- Enlace para login -->
-            <div style="text-align: center; margin-top: 40px; padding: 25px; background: #f8f9fa; border-radius: 10px;">
-                <h3 style="color: #1e3c72; margin-bottom: 15px;">¿Necesitas más funciones?</h3>
-                <p style="color: #666; margin-bottom: 20px;">Inicia sesión para guardar búsquedas y acceder a funciones avanzadas</p>
-                <a href="/login" style="background: #1e3c72; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
-                    Iniciar Sesión
-                </a>
-            </div>
-        </div>
-        
-        <script>
-        // Datos de vehículos
-        const vehicleData = {vehicle_data_json};
-        const hasAPI = {'true' if serpapi_key and serpapi_key.strip() else 'false'};
-        
-        // Inicializar selectores de vehículos
-        function initVehicleSelectors() {{
-            const yearSelect = document.getElementById('vehicleYear');
-            const makeSelect = document.getElementById('vehicleMake');
-            
-            // Llenar años (más recientes primero)
-            const years = [...vehicleData.years].reverse();
-            years.forEach(year => {{
-                const option = document.createElement('option');
-                option.value = year;
-                option.textContent = year;
-                yearSelect.appendChild(option);
-            }});
-            
-            // Llenar marcas
-            Object.keys(vehicleData.makes).forEach(make => {{
-                const option = document.createElement('option');
-                option.value = make;
-                option.textContent = make.charAt(0).toUpperCase() + make.slice(1);
-                makeSelect.appendChild(option);
-            }});
-            
-            // Evento para actualizar modelos cuando cambia la marca
-            makeSelect.addEventListener('change', updateModels);
-        }}
-        
-        function updateModels() {{
+function updateModels() {{
             const makeSelect = document.getElementById('vehicleMake');
             const modelSelect = document.getElementById('vehicleModel');
             const selectedMake = makeSelect.value;
             
-            // Limpiar modelos
             modelSelect.innerHTML = '<option value="">Seleccionar modelo</option>';
             
             if (selectedMake && vehicleData.makes[selectedMake]) {{
@@ -213,7 +15,6 @@ def home():
             }}
         }}
         
-        // Manejar subida de imagen
         function handleImageUpload(event) {{
             const file = event.target.files[0];
             if (file) {{
@@ -225,11 +26,9 @@ def home():
             }}
         }}
         
-        // Búsqueda de repuestos - FUNCIÓN PRINCIPAL CORREGIDA
         async function searchParts() {{
             console.log('🔍 Iniciando búsqueda...');
             
-            // Verificar si hay API configurada
             if (!hasAPI) {{
                 showError('La aplicación requiere configurar SERPAPI_KEY para funcionar. Contacte al administrador.');
                 return;
@@ -240,12 +39,6 @@ def home():
             const vehicleYear = document.getElementById('vehicleYear').value;
             const vehicleMake = document.getElementById('vehicleMake').value;
             const vehicleModel = document.getElementById('vehicleModel').value;
-            
-            console.log('📊 Datos de búsqueda:', {{
-                query: query,
-                hasImage: imageInput.files.length > 0,
-                vehicle: {{year: vehicleYear, make: vehicleMake, model: vehicleModel}}
-            }});
             
             if (!query && !imageInput.files[0]) {{
                 showError('Por favor ingresa un término de búsqueda o sube una imagen del repuesto');
@@ -264,66 +57,50 @@ def home():
             if (vehicleModel) formData.append('vehicle_model', vehicleModel);
             
             try {{
-                console.log('🌐 Enviando petición a /api/search-parts-public...');
-                
                 const response = await fetch('/api/search-parts-public', {{
                     method: 'POST',
                     body: formData
                 }});
-                
-                console.log('📥 Respuesta recibida:', response.status, response.statusText);
                 
                 if (!response.ok) {{
                     throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
                 }}
                 
                 const result = await response.json();
-                console.log('📊 Datos recibidos:', result);
                 
                 if (result.success) {{
                     if (result.products && result.products.length > 0) {{
-                        console.log('✅ Búsqueda exitosa, mostrando resultados...');
                         displayResults(result.products, result.search_info || {{}});
                     }} else {{
-                        showError(result.message || 'No se encontraron repuestos para esta búsqueda. Intenta con términos más específicos.');
+                        showError(result.message || 'No se encontraron repuestos para esta búsqueda.');
                     }}
                 }} else {{
-                    console.error('❌ Error en búsqueda:', result.message);
                     showError(result.message || 'Error en la búsqueda. Intenta nuevamente.');
                 }}
             }} catch (error) {{
-                console.error('❌ Error de conexión:', error);
-                showError(`Error de conexión: ${{error.message}}. Verifica tu internet e intenta nuevamente.`);
+                showError(`Error de conexión: ${{error.message}}`);
             }} finally {{
                 showLoading(false);
             }}
         }}
         
         function displayResults(products, searchInfo) {{
-            console.log('📊 Productos a mostrar:', products);
-            console.log('📋 Info de búsqueda:', searchInfo);
-            
             if (!products || products.length === 0) {{
-                console.error('❌ No hay productos para mostrar');
-                showError('No se encontraron repuestos. Intenta con otros términos de búsqueda.');
+                showError('No se encontraron repuestos.');
                 return;
             }}
             
             const resultsContainer = document.getElementById('searchResults');
             
             let html = `
-                <div class="success">
-                    <h3 style="margin-bottom: 10px;">
-                        ✅ Resultados Encontrados (${{products.length}} productos)
-                    </h3>
+                <div class="alert alert-success">
+                    <h5>✅ Resultados Encontrados (${{products.length}} productos)</h5>
                     <p><strong>Búsqueda:</strong> ${{searchInfo.query || 'Imagen'}} ${{searchInfo.vehicle ? '| Vehículo: ' + searchInfo.vehicle : ''}}</p>
-                    <p style="font-size: 14px; margin-top: 8px;">🔗 Enlaces directos a tiendas especializadas en repuestos automotrices</p>
+                    <small>🔗 Enlaces directos a tiendas especializadas en repuestos automotrices</small>
                 </div>
-                <div class="product-grid">
             `;
             
             products.forEach(product => {{
-                // Determinar colores del badge según el tipo
                 let badgeClass = 'aftermarket';
                 let badgeText = product.part_type || 'Aftermarket';
                 
@@ -339,21 +116,338 @@ def home():
                 
                 html += `
                     <div class="product-card">
-                        <h4 class="product-title">
+                        <div class="product-title">
                             ${{product.title}} 
                             <span class="part-badge ${{badgeClass}}">${{badgeText}}</span>
-                        </h4>
+                        </div>
                         <div class="product-price">${{product.price}}</div>
-                        <div class="product-store"><strong>Tienda:</strong> ${{product.source}}</div>
-                        ${{product.rating ? `<div style="font-size: 13px; color: #666; margin: 8px 0;">⭐ ${{product.rating}} (${{product.reviews || '0'}} reseñas)</div>` : ''}}
-                        <a href="${{product.link}}" target="_blank" class="product-link" rel="noopener noreferrer">
+                        <div class="mb-2"><strong>Tienda:</strong> ${{product.source}}</div>
+                        ${{product.rating ? `<div class="mb-2"><small>⭐ ${{product.rating}} (${{product.reviews || '0'}} reseñas)</small></div>` : ''}}
+                        <a href="${{product.link}}" target="_blank" class="btn btn-success btn-sm" rel="noopener noreferrer">
+                            Ver en Tienda →
+                        </a>
+                    </div>
+                `;
+            }});
+            
+            html += `
+                <div class="alert alert-info mt-4">
+                    <h6>💡 Consejos para comprar repuestos</h6>
+                    <ul class="mb-0">
+                        <li>✅ Verifica la compatibilidad con tu vehículo antes de comprar</li>
+                        <li>💰 Compara precios entre diferentes tiendas</li>
+                        <li>⭐ Lee las reseñas de otros compradores</li>
+                        <li>🛡️ Considera la garantía ofrecida por cada tienda</li>
+                        <li>🔗 Los enlaces te llevan directamente a la página del producto</li>
+                    </ul>
+                </div>
+            `;
+            
+            resultsContainer.innerHTML = html;
+        }}
+        
+        function showLoading(show) {{
+            document.getElementById('searchLoading').style.display = show ? 'block' : 'none';
+        }}
+        
+        function showError(message) {{
+            const errorDiv = document.getElementById('searchError');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }}
+        
+        function hideError() {{
+            document.getElementById('searchError').style.display = 'none';
+        }}
+        
+        function clearResults() {{
+            document.getElementById('searchResults').innerHTML = '';
+        }}
+        
+        document.getElementById('searchQuery').addEventListener('keypress', function(e) {{
+            if (e.key === 'Enter') {{
+                searchParts();
+            }}
+        }});
+        
+        document.addEventListener('DOMContentLoaded', function() {{
+            initVehicleSelectors();
+        }});
+        </script>
+        '''
+        
+        return render_page("Auto Parts Finder USA - Encuentra Repuestos Automotrices", home_content)
+        
+    except Exception as e:
+        logger.error(f"Error in home route: {e}")
+        return render_page("Error", '<div class="alert alert-danger"><h4>Error</h4><p>Error cargando la página principal</p><a href="/" class="btn btn-primary">Reintentar</a></div>'), 500
+
+@app.route('/login', methods=['GET'])
+def auth_login_page():
+    """Página de login"""
+    try:
+        if firebase_auth and firebase_auth.is_user_logged_in():
+            return redirect(url_for('search_page'))
+        
+        login_content = '''
+            <h1>🔐 Auto Parts Finder</h1>
+            <div class="subtitle">Iniciar Sesión para Acceso Completo</div>
+            
+            <div class="alert alert-info">
+                <h5>Beneficios de crear cuenta:</h5>
+                <ul class="mb-0">
+                    <li>Guardar búsquedas y listas de repuestos</li>
+                    <li>Historial de búsquedas</li>
+                    <li>Comparación de precios avanzada</li>
+                    <li>Alertas de disponibilidad</li>
+                </ul>
+            </div>
+            
+            <form id="loginForm" onsubmit="handleLogin(event)">
+                <div class="mb-3">
+                    <label for="email" class="form-label">Correo electrónico:</label>
+                    <input type="email" id="email" class="form-control" placeholder="tu@email.com" required>
+                </div>
+                <div class="mb-3">
+                    <label for="password" class="form-label">Contraseña:</label>
+                    <input type="password" id="password" class="form-control" placeholder="Tu contraseña" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">Iniciar Sesión</button>
+            </form>
+            
+            <div id="loginLoading" class="text-center mt-3" style="display: none;">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="mt-2">Verificando credenciales...</p>
+            </div>
+            
+            <div id="loginError" class="alert alert-danger mt-3" style="display: none;"></div>
+            
+            <div class="alert alert-warning mt-3">
+                <h6>🔑 Credenciales de Prueba:</h6>
+                <div class="mb-2">
+                    <strong>Administrador:</strong><br>
+                    Email: admin@autoparts.com<br>
+                    Contraseña: AutoParts2025!
+                </div>
+                <div>
+                    <strong>Usuario Regular:</strong><br>
+                    Email: user@autoparts.com<br>
+                    Contraseña: UserPass123!
+                </div>
+            </div>
+            
+            <div class="text-center mt-3">
+                <a href="/" class="btn btn-link">← Volver a búsqueda sin registrarse</a>
+            </div>
+        
+        <script>
+        async function handleLogin(event) {
+            event.preventDefault();
+            
+            const email = document.getElementById('email').value.trim();
+            const password = document.getElementById('password').value.trim();
+            
+            if (!email || !password) {
+                showLoginError('Por favor completa todos los campos');
+                return;
+            }
+            
+            document.getElementById('loginForm').style.display = 'none';
+            document.getElementById('loginLoading').style.display = 'block';
+            hideLoginError();
+            
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    window.location.href = '/search';
+                } else {
+                    showLoginError(result.message || 'Error de autenticación');
+                    document.getElementById('loginForm').style.display = 'block';
+                }
+            } catch (error) {
+                showLoginError('Error de conexión. Intenta nuevamente.');
+                document.getElementById('loginForm').style.display = 'block';
+            } finally {
+                document.getElementById('loginLoading').style.display = 'none';
+            }
+        }
+        
+        function showLoginError(message) {
+            const errorDiv = document.getElementById('loginError');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+        
+        function hideLoginError() {
+            document.getElementById('loginError').style.display = 'none';
+        }
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            const demoSection = document.querySelector('.alert-warning');
+            if (demoSection) {
+                demoSection.style.cursor = 'pointer';
+                demoSection.addEventListener('click', function(e) {
+                    if (e.target.textContent.includes('Administrador') || e.target.closest('div').textContent.includes('Administrador')) {
+                        document.getElementById('email').value = 'admin@autoparts.com';
+                        document.getElementById('password').value = 'AutoParts2025!';
+                    } else if (e.target.textContent.includes('Usuario Regular') || e.target.closest('div').textContent.includes('Usuario Regular')) {
+                        document.getElementById('email').value = 'user@autoparts.com';
+                        document.getElementById('password').value = 'UserPass123!';
+                    }
+                });
+            }
+        });
+        </script>
+        '''
+        
+        return render_page("Iniciar Sesión - Auto Parts Finder", login_content)
+        
+    except Exception as e:
+        logger.error(f"Error in login page: {e}")
+        return render_page("Error", '<div class="alert alert-danger"><h4>Error</h4><p>Error cargando página de login</p><a href="/">Volver</a></div>'), 500
+
+@app.route('/search')
+@login_required
+def search_page():
+    """Página de búsqueda para usuarios autenticados"""
+    try:
+        current_user = firebase_auth.get_current_user()
+        user_name = current_user['user_name'] if current_user else 'Usuario'
+        user_role = current_user.get('user_role', 'user') if current_user else 'user'
+        
+        search_content = f'''
+            <div class="alert alert-info text-center">
+                👋 Bienvenido, <strong>{html.escape(user_name)}</strong> ({user_role.title()}) | 
+                <a href="/logout" class="btn btn-sm btn-outline-primary">Cerrar Sesión</a>
+            </div>
+            
+            <h1>🔧 Auto Parts Finder PRO</h1>
+            <div class="subtitle">Búsqueda avanzada de repuestos con funciones premium</div>
+            
+            <div class="alert alert-success">
+                <h6>🎯 Funciones Premium Activadas</h6>
+                <ul class="mb-0">
+                    <li>Búsquedas ilimitadas con SerpAPI</li>
+                    <li>Precios en tiempo real</li>
+                    <li>Comparación avanzada</li>
+                    <li>Historial de búsquedas</li>
+                </ul>
+            </div>
+            
+            <div class="input-group mb-3">
+                <input type="text" id="searchQuery" class="form-control" placeholder="Buscar repuestos con mayor precisión..." maxlength="200" required>
+                <button class="btn btn-primary" onclick="searchParts()">🔍 Buscar PRO</button>
+            </div>
+            
+            <div id="searchLoading" class="text-center" style="display: none;">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="mt-2">Buscando en base de datos premium...</p>
+            </div>
+            
+            <div id="searchError" class="alert alert-danger" style="display: none;"></div>
+            
+            <div id="searchResults"></div>
+        
+        <script>
+        async function searchParts() {{
+            const query = document.getElementById('searchQuery').value.trim();
+            
+            if (!query) {{
+                showError('Por favor ingresa un término de búsqueda');
+                return;
+            }}
+            
+            showLoading(true);
+            hideError();
+            clearResults();
+            
+            const formData = new FormData();
+            formData.append('query', query);
+            
+            try {{
+                const response = await fetch('/api/search-parts', {{
+                    method: 'POST',
+                    body: formData
+                }});
+                
+                if (!response.ok) {{
+                    throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
+                }}
+                
+                const result = await response.json();
+                
+                if (result.success) {{
+                    if (result.products && result.products.length > 0) {{
+                        displayResults(result.products);
+                    }} else {{
+                        showError(result.message || 'No se encontraron repuestos para esta búsqueda');
+                    }}
+                }} else {{
+                    showError(result.message || 'Error en la búsqueda');
+                }}
+            }} catch (error) {{
+                showError(`Error de conexión: ${{error.message}}`);
+            }} finally {{
+                showLoading(false);
+            }}
+        }}
+        
+        function displayResults(products) {{
+            if (!products || products.length === 0) {{
+                showError('No se encontraron repuestos');
+                return;
+            }}
+            
+            const resultsContainer = document.getElementById('searchResults');
+            
+            let html = `
+                <div class="alert alert-success">
+                    <h5>✅ Búsqueda Premium Completada (${{products.length}} productos encontrados)</h5>
+                    <small>🔗 Enlaces directos verificados a tiendas especializadas</small>
+                </div>
+            `;
+            
+            products.forEach(product => {{
+                let badgeClass = 'aftermarket';
+                let badgeText = product.part_type || 'Aftermarket';
+                
+                if (product.part_type === 'OEM') {{
+                    badgeClass = 'oem';
+                    badgeText = '🏭 OEM Original';
+                }} else if (product.part_type === 'Premium') {{
+                    badgeClass = 'premium';
+                    badgeText = '⭐ Premium';
+                }} else {{
+                    badgeText = '🔧 Aftermarket';
+                }}
+                
+                html += `
+                    <div class="product-card">
+                        <div class="product-title">
+                            ${{product.title}} 
+                            <span class="part-badge ${{badgeClass}}">${{badgeText}}</span>
+                        </div>
+                        <div class="product-price">${{product.price}}</div>
+                        <div class="mb-2"><strong>Tienda:</strong> ${{product.source}}</div>
+                        ${{product.rating ? `<div class="mb-2"><small>⭐ ${{product.rating}} (${{product.reviews || '0'}} reseñas)</small></div>` : ''}}
+                        <a href="${{product.link}}" target="_blank" class="btn btn-success btn-sm" rel="noopener noreferrer">
                             Ver Producto →
                         </a>
                     </div>
                 `;
             }});
             
-            html += '</div>';
             resultsContainer.innerHTML = html;
         }}
         
@@ -431,9 +525,8 @@ def api_login():
 
 @app.route('/api/search-parts-public', methods=['POST'])
 def api_search_parts_public():
-    """API de búsqueda pública profesional - CORREGIDA"""
+    """API de búsqueda pública profesional"""
     try:
-        # Verificar que SerpAPI esté configurada
         if not auto_parts_finder:
             logger.error("❌ AutoPartsFinder no está inicializado")
             return jsonify({
@@ -449,7 +542,6 @@ def api_search_parts_public():
         print(f"📥 DEBUG: Búsqueda recibida - Query: '{query}', Vehículo: {vehicle_year} {vehicle_make} {vehicle_model}")
         logger.info(f"📥 Búsqueda recibida - Query: '{query}', Vehículo: {vehicle_year} {vehicle_make} {vehicle_model}")
         
-        # Procesar imagen si existe
         image_content = None
         image_file = request.files.get('image')
         if image_file and image_file.filename:
@@ -457,28 +549,23 @@ def api_search_parts_public():
                 image_content = image_file.read()
                 print(f"📷 DEBUG: Imagen recibida: {image_file.filename}, tamaño: {len(image_content)} bytes")
                 if not validate_image(image_content):
-                    print("❌ DEBUG: Imagen no válida")
                     return jsonify({
                         'success': False, 
                         'message': 'Imagen no válida. Use formatos JPG, PNG o WEBP.'
                     })
             except Exception as e:
                 logger.error(f"Error procesando imagen: {e}")
-                print(f"❌ DEBUG: Error procesando imagen: {e}")
                 return jsonify({
                     'success': False, 
                     'message': 'Error procesando la imagen'
                 })
         
-        # Validación
         if not query and not image_content:
-            print("❌ DEBUG: No hay query ni imagen")
             return jsonify({
                 'success': False, 
                 'message': 'Proporciona un término de búsqueda o una imagen'
             })
         
-        # Información del vehículo
         vehicle_info = None
         if vehicle_year or vehicle_make or vehicle_model:
             vehicle_info = {
@@ -486,11 +573,6 @@ def api_search_parts_public():
                 'make': vehicle_make,
                 'model': vehicle_model
             }
-            print(f"🚗 DEBUG: Info del vehículo: {vehicle_info}")
-        
-        # Realizar búsqueda profesional con manejo de errores mejorado
-        print(f"🔍 DEBUG: Iniciando búsqueda profesional...")
-        logger.info(f"🔍 Iniciando búsqueda profesional...")
         
         search_result = auto_parts_finder.search_auto_parts(
             query=query,
@@ -498,22 +580,11 @@ def api_search_parts_public():
             vehicle_info=vehicle_info
         )
         
-        print(f"📊 DEBUG: Resultado de búsqueda: {search_result}")
-        logger.info(f"📊 Resultado de búsqueda recibido")
-        
-        # Verificar resultado de la búsqueda
         if not search_result.get('success', False):
-            error_message = search_result.get('message', 'Error desconocido en la búsqueda')
-            print(f"❌ DEBUG: Error en búsqueda: {error_message}")
-            return jsonify({
-                'success': False,
-                'message': error_message,
-                'products': []
-            })
+            return jsonify(search_result)
         
         products = search_result.get('products', [])
         
-        # Información adicional de la búsqueda
         search_info = {
             'query': query,
             'has_image': bool(image_content),
@@ -528,9 +599,6 @@ def api_search_parts_public():
                            vehicle_info.get('model', '').upper()] if p]
             search_info['vehicle'] = ' '.join(vehicle_parts)
         
-        print(f"✅ DEBUG: Respuesta exitosa con {len(products)} productos")
-        logger.info(f"✅ Respuesta exitosa con {len(products)} productos")
-        
         return jsonify({
             'success': True,
             'products': products,
@@ -541,20 +609,17 @@ def api_search_parts_public():
         
     except Exception as e:
         logger.error(f"❌ Error en búsqueda pública: {e}")
-        print(f"❌ DEBUG: Error en búsqueda pública: {e}")
         return jsonify({
             'success': False, 
-            'message': f'Error interno del servidor. Intenta nuevamente.'
+            'message': 'Error interno del servidor. Intenta nuevamente.'
         })
 
 @app.route('/api/search-parts', methods=['POST'])
 @login_required
 def api_search_parts():
-    """API de búsqueda para usuarios autenticados - CORREGIDA"""
+    """API de búsqueda para usuarios autenticados"""
     try:
         query = request.form.get('query', '').strip()
-        
-        print(f"🔍 DEBUG: Búsqueda premium - Query: '{query}'")
         
         if not query:
             return jsonify({
@@ -563,15 +628,12 @@ def api_search_parts():
             })
         
         if not auto_parts_finder:
-            print("❌ DEBUG: AutoPartsFinder no disponible")
             return jsonify({
                 'success': False, 
                 'message': 'Servicio no disponible. Configure SERPAPI_KEY.'
             })
         
         search_result = auto_parts_finder.search_auto_parts(query=query)
-        
-        print(f"📊 DEBUG: Búsqueda premium completada: {search_result.get('success', False)}")
         
         if search_result.get('success', False):
             products = search_result.get('products', [])
@@ -583,15 +645,10 @@ def api_search_parts():
                 'message': search_result.get('message', f'Se encontraron {len(products)} productos')
             })
         else:
-            return jsonify({
-                'success': False,
-                'message': search_result.get('message', 'Error en la búsqueda'),
-                'products': []
-            })
+            return jsonify(search_result)
         
     except Exception as e:
         logger.error(f"Error en búsqueda autenticada: {e}")
-        print(f"❌ DEBUG: Error en búsqueda autenticada: {e}")
         return jsonify({
             'success': False, 
             'message': 'Error interno del servidor'
@@ -605,15 +662,10 @@ def api_search_parts():
 def not_found(error):
     """Página no encontrada"""
     content = '''
-    <div class="container">
-        <h1>🚫 Página No Encontrada</h1>
-        <div class="subtitle">Error 404</div>
-        <div style="text-align: center; margin: 40px 0;">
-            <p style="color: #666; margin-bottom: 30px;">La página que buscas no existe o ha sido movida.</p>
-            <a href="/" style="background: #1e3c72; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: 600;">
-                🏠 Volver al Inicio
-            </a>
-        </div>
+    <div class="alert alert-warning text-center">
+        <h4>🚫 Página No Encontrada</h4>
+        <p>La página que buscas no existe o ha sido movida.</p>
+        <a href="/" class="btn btn-primary">🏠 Volver al Inicio</a>
     </div>
     '''
     return render_page("Página No Encontrada - Auto Parts Finder", content), 404
@@ -622,15 +674,10 @@ def not_found(error):
 def internal_error(error):
     """Error interno del servidor"""
     content = '''
-    <div class="container">
-        <h1>⚠ Error Interno</h1>
-        <div class="subtitle">Error 500</div>
-        <div style="text-align: center; margin: 40px 0;">
-            <p style="color: #666; margin-bottom: 30px;">Ha ocurrido un error interno en el servidor. Nuestro equipo ha sido notificado.</p>
-            <a href="/" style="background: #1e3c72; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: 600;">
-                🔄 Reintentar
-            </a>
-        </div>
+    <div class="alert alert-danger text-center">
+        <h4>⚠ Error Interno</h4>
+        <p>Ha ocurrido un error interno en el servidor.</p>
+        <a href="/" class="btn btn-primary">🔄 Reintentar</a>
     </div>
     '''
     return render_page("Error Interno - Auto Parts Finder", content), 500
@@ -640,15 +687,10 @@ def handle_exception(e):
     """Manejador de excepciones generales"""
     logger.error(f"Excepción no manejada: {e}")
     content = '''
-    <div class="container">
-        <h1>❌ Error Inesperado</h1>
-        <div class="subtitle">Algo salió mal</div>
-        <div style="text-align: center; margin: 40px 0;">
-            <p style="color: #666; margin-bottom: 30px;">Ha ocurrido un error inesperado. Por favor intenta nuevamente.</p>
-            <a href="/" style="background: #1e3c72; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: 600;">
-                🏠 Volver al Inicio
-            </a>
-        </div>
+    <div class="alert alert-danger text-center">
+        <h4>❌ Error Inesperado</h4>
+        <p>Ha ocurrido un error inesperado. Por favor intenta nuevamente.</p>
+        <a href="/" class="btn btn-primary">🏠 Volver al Inicio</a>
     </div>
     '''
     return render_page("Error - Auto Parts Finder", content), 500
@@ -658,12 +700,11 @@ def handle_exception(e):
 # ==============================================================================
 
 def initialize_components():
-    """Inicializar todos los componentes de la aplicación de forma segura"""
+    """Inicializar todos los componentes de la aplicación"""
     global firebase_auth, auto_parts_finder
     
-    print("\n🔧 INICIALIZANDO COMPONENTES PROFESIONALES...")
+    print("\n🔧 INICIALIZANDO COMPONENTES...")
     
-    # Inicializar Firebase Auth
     try:
         firebase_auth = FirebaseAuth()
         logger.info("✅ FirebaseAuth inicializado correctamente")
@@ -673,7 +714,6 @@ def initialize_components():
         print(f"❌ DEBUG: Error en FirebaseAuth: {e}")
         firebase_auth = None
     
-    # Inicializar AutoPartsFinder (REQUERIDO)
     try:
         auto_parts_finder = AutoPartsFinder()
         logger.info("✅ AutoPartsFinder inicializado correctamente")
@@ -688,9 +728,9 @@ def initialize_components():
         print(f"❌ DEBUG: Error inesperado en AutoPartsFinder: {e}")
         auto_parts_finder = None
     
-    print("🔧 Inicialización de componentes completada\n")
+    print("🔧 Inicialización completada\n")
 
-# Inicializar componentes al importar
+# Inicializar componentes
 initialize_components()
 
 # ==============================================================================
@@ -699,10 +739,9 @@ initialize_components()
 
 if __name__ == '__main__':
     print("=" * 70)
-    print("🔧 AUTO PARTS FINDER USA - VERSIÓN FINAL SIN ERRORES")
+    print("🔧 AUTO PARTS FINDER USA - VERSIÓN COMPLETAMENTE LIMPIA")
     print("=" * 70)
     
-    # Información del sistema
     port = int(os.environ.get('PORT', 5000))
     debug_mode = os.environ.get('FLASK_ENV') == 'development'
     
@@ -714,13 +753,12 @@ if __name__ == '__main__':
     print(f"🔐 Firebase Auth: {'✅ Configurado' if firebase_auth else '❌ Error'}")
     print(f"🔍 Auto Parts Finder: {'✅ Activo' if auto_parts_finder else '❌ ERROR CRÍTICO'}")
     
-    # Estado de SerpAPI
     serpapi_key = os.environ.get('SERPAPI_KEY')
     if serpapi_key and serpapi_key.strip():
         print(f"🔑 SerpAPI: ✅ CONFIGURADO CORRECTAMENTE")
         print(f"   Key: {serpapi_key[:4]}...{serpapi_key[-4:]} (longitud: {len(serpapi_key)})")
         print("   ➡️ La aplicación funcionará correctamente")
-        print("   🔧 CSS separado en función - ERROR DE SINTAXIS CORREGIDO")
+        print("   🔧 CSS con Bootstrap - SIN ERRORES DE SINTAXIS")
     else:
         print("🔑 SerpAPI: ❌ NO CONFIGURADO")
         print("   ➡️ LA APLICACIÓN NO FUNCIONARÁ")
@@ -732,15 +770,14 @@ if __name__ == '__main__':
     print("   Admin: admin@autoparts.com / AutoParts2025!")
     print("   User: user@autoparts.com / UserPass123!")
     print("🔗 Página principal: http://localhost:5000")
-    print("✅ ERROR DE SINTAXIS CORREGIDO - CSS SEPARADO")
+    print("✅ TODOS LOS ERRORES DE SINTAXIS CORREGIDOS")
+    print("✅ USANDO BOOTSTRAP CDN PARA EVITAR PROBLEMAS CSS")
     print("=" * 70)
     
-    # Verificar estado crítico
     if not auto_parts_finder:
         print("\n❌ ADVERTENCIA CRÍTICA:")
         print("   La aplicación NO funcionará sin SERPAPI_KEY")
         print("   Configure la variable de entorno antes de usar")
-        print("   Todas las búsquedas fallarán")
         print("=" * 70)
     
     try:
@@ -758,353 +795,7 @@ if __name__ == '__main__':
         print("   - Permisos de red")
         print("   - Variables de entorno")
         print("   - SERPAPI_KEY configurada correctamente")
-        print("   - Dependencias instaladas")
-                            ${{product.title}} 
-                            <span class="part-badge ${{badgeClass}}">${{badgeText}}</span>
-                        </h4>
-                        <div class="product-price">${{product.price}}</div>
-                        <div class="product-store"><strong>Tienda:</strong> ${{product.source}}</div>
-                        ${{product.rating ? `<div style="font-size: 13px; color: #666; margin: 8px 0;">⭐ ${{product.rating}} (${{product.reviews || '0'}} reseñas)</div>` : ''}}
-                        <a href="${{product.link}}" target="_blank" class="product-link" rel="noopener noreferrer">
-                            Ver en Tienda →
-                        </a>
-                    </div>
-                `;
-            }});
-            
-            html += '</div>';
-            
-            // Agregar información adicional
-            html += `
-                <div style="background: #f8f9fa; padding: 20px; border-radius: 10px; margin-top: 30px; text-align: center;">
-                    <h4 style="color: #1e3c72; margin-bottom: 15px;">💡 Consejos para comprar repuestos</h4>
-                    <ul style="text-align: left; color: #666; max-width: 600px; margin: 0 auto;">
-                        <li style="margin-bottom: 8px;">✅ Verifica SIEMPRE la compatibilidad con tu vehículo antes de comprar</li>
-                        <li style="margin-bottom: 8px;">💰 Compara precios entre diferentes tiendas</li>
-                        <li style="margin-bottom: 8px;">⭐ Lee las reseñas de otros compradores</li>
-                        <li style="margin-bottom: 8px;">🛡️ Considera la garantía ofrecida por cada tienda</li>
-                        <li style="margin-bottom: 8px;">🔗 Los enlaces te llevan directamente a la página del producto</li>
-                        <li style="margin-bottom: 8px;">📞 Confirma disponibilidad antes de ir a recoger</li>
-                    </ul>
-                </div>
-            `;
-            
-            resultsContainer.innerHTML = html;
-            console.log('✅ Resultados mostrados exitosamente');
-        }}
-        
-        function showLoading(show) {{
-            const loadingDiv = document.getElementById('searchLoading');
-            loadingDiv.style.display = show ? 'block' : 'none';
-            console.log('🔄 Loading:', show);
-        }}
-        
-        function showError(message) {{
-            const errorDiv = document.getElementById('searchError');
-            errorDiv.textContent = message;
-            errorDiv.style.display = 'block';
-            console.error('❌ Error mostrado:', message);
-        }}
-        
-        function hideError() {{
-            const errorDiv = document.getElementById('searchError');
-            errorDiv.style.display = 'none';
-        }}
-        
-        function clearResults() {{
-            const resultsDiv = document.getElementById('searchResults');
-            resultsDiv.innerHTML = '';
-            console.log('🧹 Resultados limpiados');
-        }}
-        
-        // Buscar al presionar Enter
-        document.getElementById('searchQuery').addEventListener('keypress', function(e) {{
-            if (e.key === 'Enter') {{
-                searchParts();
-            }}
-        }});
-        
-        // Inicializar cuando carga la página
-        document.addEventListener('DOMContentLoaded', function() {{
-            console.log('🚀 Página cargada, inicializando...');
-            initVehicleSelectors();
-            
-            // Mostrar estado de API en consola
-            if (hasAPI) {{
-                console.log('✅ SerpAPI configurado correctamente');
-            }} else {{
-                console.warn('❌ SerpAPI NO configurado - La aplicación no funcionará');
-            }}
-        }});
-        </script>
-        '''
-        
-        return render_page("Auto Parts Finder USA - Encuentra Repuestos Automotrices", home_content)
-        
-    except Exception as e:
-        logger.error(f"Error in home route: {e}")
-        return render_page("Error", '<div class="container"><h1>Error</h1><p>Error cargando la página principal</p><a href="/">Reintentar</a></div>'), 500
-
-@app.route('/login', methods=['GET'])
-def auth_login_page():
-    """Página de login"""
-    try:
-        if firebase_auth and firebase_auth.is_user_logged_in():
-            return redirect(url_for('search_page'))
-        
-        login_content = '''
-        <div class="container">
-            <h1>🔐 Auto Parts Finder</h1>
-            <div class="subtitle">Iniciar Sesión para Acceso Completo</div>
-            
-            <div style="background: #e3f2fd; padding: 20px; border-radius: 10px; margin-bottom: 25px;">
-                <h3 style="color: #1565c0; margin-bottom: 15px;">Beneficios de crear cuenta:</h3>
-                <ul style="color: #1976d2; margin-left: 20px;">
-                    <li>Guardar búsquedas y listas de repuestos</li>
-                    <li>Historial de búsquedas</li>
-                    <li>Comparación de precios avanzada</li>
-                    <li>Alertas de disponibilidad</li>
-                </ul>
-            </div>
-            
-            <form id="loginForm" onsubmit="handleLogin(event)">
-                <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #333;">Correo electrónico:</label>
-                    <input type="email" id="email" placeholder="tu@email.com" required>
-                </div>
-                <div style="margin-bottom: 25px;">
-                    <label style="display: block; margin-bottom: 5px; font-weight: 600; color: #333;">Contraseña:</label>
-                    <input type="password" id="password" placeholder="Tu contraseña" required>
-                </div>
-                <button type="submit" style="width: 100%; padding: 16px; font-size: 18px;">Iniciar Sesión</button>
-            </form>
-            
-            <div class="loading" id="loginLoading">
-                <div class="spinner"></div>
-                <p>Verificando credenciales...</p>
-            </div>
-            
-            <div class="error" id="loginError"></div>
-            
-            <div style="background: #fff3cd; padding: 20px; border-radius: 10px; margin-top: 25px; border-left: 4px solid #ffc107;">
-                <h4 style="color: #856404; margin-bottom: 10px;">🔑 Credenciales de Prueba:</h4>
-                <div style="margin-bottom: 10px;">
-                    <strong>Administrador:</strong><br>
-                    Email: admin@autoparts.com<br>
-                    Contraseña: AutoParts2025!
-                </div>
-                <div>
-                    <strong>Usuario Regular:</strong><br>
-                    Email: user@autoparts.com<br>
-                    Contraseña: UserPass123!
-                </div>
-            </div>
-            
-            <div style="text-align: center; margin-top: 30px;">
-                <p style="margin-bottom: 15px;">
-                    <a href="/" style="color: #1e3c72; text-decoration: none; font-weight: 600;">← Volver a búsqueda sin registrarse</a>
-                </p>
-            </div>
-        </div>
-        
-        <script>
-        async function handleLogin(event) {
-            event.preventDefault();
-            
-            const email = document.getElementById('email').value.trim();
-            const password = document.getElementById('password').value.trim();
-            
-            if (!email || !password) {
-                showLoginError('Por favor completa todos los campos');
-                return;
-            }
-            
-            document.getElementById('loginForm').style.display = 'none';
-            document.getElementById('loginLoading').style.display = 'block';
-            hideLoginError();
-            
-            try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password })
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    window.location.href = '/search';
-                } else {
-                    showLoginError(result.message || 'Error de autenticación');
-                    document.getElementById('loginForm').style.display = 'block';
-                }
-            } catch (error) {
-                console.error('Login error:', error);
-                showLoginError('Error de conexión. Intenta nuevamente.');
-                document.getElementById('loginForm').style.display = 'block';
-            } finally {
-                document.getElementById('loginLoading').style.display = 'none';
-            }
-        }
-        
-        function showLoginError(message) {
-            const errorDiv = document.getElementById('loginError');
-            errorDiv.textContent = message;
-            errorDiv.style.display = 'block';
-        }
-        
-        function hideLoginError() {
-            document.getElementById('loginError').style.display = 'none';
-        }
-        
-        // Auto-completar credenciales al hacer clic en las cajas
-        document.addEventListener('DOMContentLoaded', function() {
-            const demoSection = document.querySelector('[style*="background: #fff3cd"]');
-            if (demoSection) {
-                demoSection.style.cursor = 'pointer';
-                demoSection.addEventListener('click', function(e) {
-                    if (e.target.textContent.includes('Administrador') || e.target.closest('div').textContent.includes('Administrador')) {
-                        document.getElementById('email').value = 'admin@autoparts.com';
-                        document.getElementById('password').value = 'AutoParts2025!';
-                    } else if (e.target.textContent.includes('Usuario Regular') || e.target.closest('div').textContent.includes('Usuario Regular')) {
-                        document.getElementById('email').value = 'user@autoparts.com';
-                        document.getElementById('password').value = 'UserPass123!';
-                    }
-                });
-            }
-        });
-        </script>
-        '''
-        
-        return render_page("Iniciar Sesión - Auto Parts Finder", login_content)
-        
-    except Exception as e:
-        logger.error(f"Error in login page: {e}")
-        return render_page("Error", '<div class="container"><h1>Error</h1><p>Error cargando página de login</p><a href="/">Volver</a></div>'), 500
-
-@app.route('/search')
-@login_required
-def search_page():
-    """Página de búsqueda para usuarios autenticados"""
-    try:
-        current_user = firebase_auth.get_current_user()
-        user_name = current_user['user_name'] if current_user else 'Usuario'
-        user_role = current_user.get('user_role', 'user') if current_user else 'user'
-        
-        search_content = f'''
-        <div class="container">
-            <div class="user-info">
-                👋 Bienvenido, <strong>{html.escape(user_name)}</strong> ({user_role.title()}) | 
-                <a href="/logout">Cerrar Sesión</a>
-            </div>
-            
-            <h1>🔧 Auto Parts Finder PRO</h1>
-            <div class="subtitle">Búsqueda avanzada de repuestos con funciones premium</div>
-            
-            <div style="background: linear-gradient(135deg, #e8f5e8 0%, #f0f8f0 100%); padding: 20px; border-radius: 10px; margin-bottom: 25px;">
-                <h3 style="color: #155724; margin-bottom: 10px;">🎯 Funciones Premium Activadas</h3>
-                <ul style="color: #155724; margin-left: 20px; font-size: 14px;">
-                    <li>Búsquedas ilimitadas con SerpAPI</li>
-                    <li>Precios en tiempo real</li>
-                    <li>Comparación avanzada</li>
-                    <li>Historial de búsquedas</li>
-                </ul>
-            </div>
-            
-            <!-- Búsqueda avanzada -->
-            <div class="search-bar">
-                <input type="text" id="searchQuery" placeholder="Buscar repuestos con mayor precisión..." maxlength="200" required>
-                <button onclick="searchParts()">🔍 Buscar PRO</button>
-            </div>
-            
-            <div class="loading" id="searchLoading">
-                <div class="spinner"></div>
-                <p>Buscando en base de datos premium...</p>
-            </div>
-            
-            <div class="error" id="searchError"></div>
-            
-            <div id="searchResults"></div>
-        </div>
-        
-        <script>
-        async function searchParts() {{
-            const query = document.getElementById('searchQuery').value.trim();
-            
-            if (!query) {{
-                showError('Por favor ingresa un término de búsqueda');
-                return;
-            }}
-            
-            showLoading(true);
-            hideError();
-            clearResults();
-            
-            const formData = new FormData();
-            formData.append('query', query);
-            
-            try {{
-                const response = await fetch('/api/search-parts', {{
-                    method: 'POST',
-                    body: formData
-                }});
-                
-                if (!response.ok) {{
-                    throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
-                }}
-                
-                const result = await response.json();
-                
-                if (result.success) {{
-                    if (result.products && result.products.length > 0) {{
-                        displayResults(result.products);
-                    }} else {{
-                        showError(result.message || 'No se encontraron repuestos para esta búsqueda');
-                    }}
-                }} else {{
-                    showError(result.message || 'Error en la búsqueda');
-                }}
-            }} catch (error) {{
-                console.error('Error:', error);
-                showError(`Error de conexión: ${{error.message}}`);
-            }} finally {{
-                showLoading(false);
-            }}
-        }}
-        
-        function displayResults(products) {{
-            if (!products || products.length === 0) {{
-                showError('No se encontraron repuestos');
-                return;
-            }}
-            
-            const resultsContainer = document.getElementById('searchResults');
-            
-            let html = `
-                <div class="success">
-                    <h3>✅ Búsqueda Premium Completada (${{products.length}} productos encontrados)</h3>
-                    <p style="font-size: 14px;">🔗 Enlaces directos verificados a tiendas especializadas</p>
-                </div>
-                <div class="product-grid">
-            `;
-            
-            products.forEach(product => {{
-                let badgeClass = 'aftermarket';
-                let badgeText = product.part_type || 'Aftermarket';
-                
-                if (product.part_type === 'OEM') {{
-                    badgeClass = 'oem';
-                    badgeText = '🏭 OEM Original';
-                }} else if (product.part_type === 'Premium') {{
-                    badgeClass = 'premium';
-                    badgeText = '⭐ Premium';
-                }} else {{
-                    badgeText = '🔧 Aftermarket';
-                }}
-                
-                html += `
-                    <div class="product-card">
-                        <h4 class="product-title"># webapp.py - Auto Parts Finder USA - VERSIÓN FINAL SIN ERRORES
+        print("   - Dependencias instaladas")# webapp.py - Auto Parts Finder USA - VERSION COMPLETAMENTE LIMPIA
 from flask import Flask, request, jsonify, session, redirect, url_for, render_template_string, flash
 import requests
 import os
@@ -1156,7 +847,6 @@ def debug_environment():
     print("🔍 DEBUG: ANÁLISIS DE VARIABLES DE ENTORNO")
     print("=" * 50)
     
-    # Verificar SERPAPI_KEY específicamente
     serpapi_key = os.environ.get('SERPAPI_KEY')
     if serpapi_key:
         print(f"✅ SERPAPI_KEY encontrada: {serpapi_key[:4]}...{serpapi_key[-4:]}")
@@ -1178,7 +868,7 @@ app.secret_key = os.environ.get('SECRET_KEY', 'auto-parts-finder-secret-key-2025
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SECURE'] = True if os.environ.get('RENDER') else False
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 # Base de datos de vehículos populares en USA
 VEHICLE_DATABASE = {
@@ -1304,7 +994,6 @@ class AutoPartsFinder:
     def __init__(self):
         print("\n🔧 INICIALIZANDO AutoPartsFinder...")
         
-        # API key es REQUERIDA para funcionar
         self.api_key = os.environ.get('SERPAPI_KEY', '').strip()
         
         if not self.api_key:
@@ -1323,7 +1012,6 @@ class AutoPartsFinder:
     def search_auto_parts(self, query=None, image_content=None, vehicle_info=None):
         """Búsqueda profesional CORREGIDA de repuestos usando SerpAPI"""
         try:
-            # Construir query final
             final_query = self._build_search_query(query, vehicle_info)
             
             if not final_query:
@@ -1336,7 +1024,6 @@ class AutoPartsFinder:
             logger.info(f"🔍 Buscando: '{final_query}'")
             print(f"🔍 DEBUG: Query final = '{final_query}'")
             
-            # Hacer llamada real a SerpAPI
             print("🚀 DEBUG: Llamando a SerpAPI...")
             return self._search_with_serpapi(final_query)
             
@@ -1352,24 +1039,22 @@ class AutoPartsFinder:
     def _search_with_serpapi(self, query):
         """Realizar búsqueda real usando SerpAPI - VERSIÓN CORREGIDA"""
         try:
-            # Parámetros corregidos según documentación oficial de SerpAPI
             params = {
                 'api_key': self.api_key,
-                'engine': 'google',  # Cambio: usar engine=google en lugar de google_shopping
-                'q': f"{query} auto parts automotive",  # Query mejorada
-                'tbm': 'shop',  # Específicamente para shopping
+                'engine': 'google',
+                'q': f"{query} auto parts automotive",
+                'tbm': 'shop',
                 'location': 'United States',
                 'hl': 'en',
                 'gl': 'us',
                 'num': 20,
-                'no_cache': 'false'  # Permitir cache para mejor rendimiento
+                'no_cache': 'false'
             }
             
             logger.info(f"🔍 Llamando a SerpAPI con query: {params['q']}")
             print(f"🌐 DEBUG: Haciendo petición REAL a SerpAPI...")
             print(f"🔑 DEBUG: Parámetros: engine={params['engine']}, tbm={params['tbm']}")
             
-            # Hacer petición HTTP con timeout y headers
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
@@ -1379,7 +1064,6 @@ class AutoPartsFinder:
             
             if response.status_code != 200:
                 logger.error(f"❌ Error HTTP {response.status_code}")
-                # Intentar obtener mensaje de error
                 try:
                     error_data = response.json()
                     error_msg = error_data.get('error', f'HTTP {response.status_code}')
@@ -1395,10 +1079,8 @@ class AutoPartsFinder:
             data = response.json()
             print(f"📊 DEBUG: Respuesta de SerpAPI recibida")
             
-            # Debug: mostrar estructura de la respuesta
             print(f"🔍 DEBUG: Claves en respuesta: {list(data.keys())}")
             
-            # Verificar si hay error en la respuesta
             if 'error' in data:
                 logger.error(f"❌ Error de SerpAPI: {data['error']}")
                 return {
@@ -1407,20 +1089,16 @@ class AutoPartsFinder:
                     'products': []
                 }
             
-            # Buscar resultados de shopping en diferentes ubicaciones posibles
             shopping_results = []
             
-            # Intentar obtener shopping_results
             if 'shopping_results' in data:
                 shopping_results = data['shopping_results']
                 print(f"📊 DEBUG: Encontrados shopping_results: {len(shopping_results)}")
             
-            # Si no hay shopping_results, intentar con organic_results que contengan shopping
             if not shopping_results and 'organic_results' in data:
                 organic_results = data['organic_results']
                 print(f"📊 DEBUG: Revisando organic_results: {len(organic_results)}")
                 
-                # Filtrar resultados que parezcan de shopping
                 for result in organic_results:
                     if any(shop_indicator in result.get('link', '').lower() for shop_indicator in 
                            ['shop', 'store', 'buy', 'price', 'product']):
@@ -1442,9 +1120,8 @@ class AutoPartsFinder:
                     'products': []
                 }
             
-            # Convertir a formato interno
             processed_results = []
-            for item in shopping_results[:15]:  # Limitar a 15 resultados
+            for item in shopping_results[:15]:
                 processed_item = self._process_serpapi_result(item)
                 if processed_item:
                     processed_results.append(processed_item)
@@ -1490,25 +1167,17 @@ class AutoPartsFinder:
     def _process_serpapi_result(self, item):
         """Procesar un resultado individual de SerpAPI - VERSIÓN MEJORADA"""
         try:
-            # Extraer datos de manera más flexible
             title = item.get('title', '').strip()
-            
-            # Múltiples formas de obtener el link
             link = item.get('link', '') or item.get('product_link', '') or item.get('url', '')
-            
-            # Múltiples formas de obtener la fuente/tienda
             source = (item.get('source', '') or 
                      item.get('store', '') or 
                      item.get('merchant', '') or
                      'Tienda Online')
-            
-            # Múltiples formas de obtener el precio
             price = (item.get('price', '') or 
                     item.get('extracted_price', '') or
                     item.get('typical_price', '') or
                     'Consultar precio')
             
-            # Validaciones básicas
             if not title:
                 print(f"⚠️ DEBUG: Producto sin título, saltando...")
                 return None
@@ -1517,30 +1186,25 @@ class AutoPartsFinder:
                 print(f"⚠️ DEBUG: Producto sin link: {title}, saltando...")
                 return None
             
-            # Validar que sea un link real
             if not link.startswith(('http://', 'https://')):
                 print(f"⚠️ DEBUG: Link inválido para {title}: {link}")
                 return None
             
-            # Procesar precio de manera más robusta
             price_numeric = 0.0
             price_display = 'Consultar precio'
             
             if price and str(price).strip():
                 try:
-                    # Si el precio es un número (extracted_price)
                     if isinstance(price, (int, float)):
                         price_numeric = float(price)
                         price_display = f"${price_numeric:.2f}"
                     else:
-                        # Extraer número del precio string
                         price_str = str(price)
                         price_clean = re.sub(r'[^\d\.]', '', price_str)
                         if price_clean and '.' in price_clean:
-                            # Asegurar solo un punto decimal
                             parts = price_clean.split('.')
                             if len(parts) == 2:
-                                price_clean = f"{parts[0]}.{parts[1][:2]}"  # Solo 2 decimales
+                                price_clean = f"{parts[0]}.{parts[1][:2]}"
                                 price_numeric = float(price_clean)
                                 price_display = f"${price_numeric:.2f}"
                         elif price_clean:
@@ -1552,17 +1216,13 @@ class AutoPartsFinder:
                     print(f"⚠️ DEBUG: Error procesando precio '{price}': {e}")
                     price_display = str(price) if price else 'Consultar precio'
             
-            # Extraer información adicional de manera segura
             rating = item.get('rating', '') or item.get('product_rating', '')
             reviews = item.get('reviews', '') or item.get('product_reviews', '')
             
-            # Detectar tipo de repuesto basado en el título de forma más inteligente
             part_type = 'Aftermarket'
             title_lower = title.lower()
             
-            # Palabras clave para OEM
             oem_keywords = ['oem', 'original', 'genuine', 'factory', 'oem part', 'original equipment']
-            # Palabras clave para Premium
             premium_keywords = ['premium', 'performance', 'heavy duty', 'professional', 'commercial grade']
             
             if any(keyword in title_lower for keyword in oem_keywords):
@@ -1595,7 +1255,6 @@ class AutoPartsFinder:
         try:
             parts = []
             
-            # Agregar información del vehículo si existe
             if vehicle_info:
                 if vehicle_info.get('year'):
                     parts.append(str(vehicle_info['year']))
@@ -1604,11 +1263,9 @@ class AutoPartsFinder:
                 if vehicle_info.get('model'):
                     parts.append(vehicle_info['model'].lower())
             
-            # Agregar query del usuario
             if query and query.strip():
                 parts.append(query.strip())
             
-            # Si no hay nada, devolver None
             if not parts:
                 return None
             
@@ -1651,166 +1308,190 @@ def validate_image(image_content):
         logger.error(f"Error validando imagen: {e}")
         return False
 
-def get_base_styles():
-    """Retorna los estilos CSS base para evitar problemas de sintaxis"""
-    return """
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { 
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; 
-        background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); 
-        min-height: 100vh; 
-        padding: 15px; 
-    }
-    .container { 
-        max-width: 800px; 
-        margin: 0 auto; 
-        background: white; 
-        padding: 30px; 
-        border-radius: 12px; 
-        box-shadow: 0 10px 30px rgba(0,0,0,0.2); 
-    }
-    h1 { color: #1e3c72; text-align: center; margin-bottom: 10px; font-size: 2.2em; }
-    .subtitle { text-align: center; color: #666; margin-bottom: 30px; font-size: 1.1em; }
-    input, select { 
-        width: 100%; 
-        padding: 14px; 
-        margin: 10px 0; 
-        border: 2px solid #e1e5e9; 
-        border-radius: 8px; 
-        font-size: 16px; 
-        transition: border-color 0.3s;
-    }
-    input:focus, select:focus { outline: none; border-color: #1e3c72; }
-    button { 
-        background: #1e3c72; 
-        color: white; 
-        border: none; 
-        border-radius: 8px; 
-        cursor: pointer; 
-        font-size: 16px; 
-        font-weight: 600; 
-        padding: 14px 24px; 
-        transition: background-color 0.3s;
-    }
-    button:hover { background: #2a5298; }
-    button:disabled { background: #ccc; cursor: not-allowed; }
-    .search-bar { display: flex; gap: 12px; margin-bottom: 25px; }
-    .search-bar input { flex: 1; margin: 0; }
-    .search-bar button { margin: 0; }
-    .vehicle-form { 
-        background: #f8f9fa; 
-        padding: 25px; 
-        border-radius: 10px; 
-        margin: 20px 0; 
-        border: 1px solid #dee2e6;
-    }
-    .vehicle-row { 
-        display: grid; 
-        grid-template-columns: 1fr 1fr 1fr; 
-        gap: 15px; 
-        margin-bottom: 15px; 
-    }
-    .tips { 
-        background: #e8f4f8; 
-        border-left: 4px solid #1e3c72; 
-        padding: 20px; 
-        border-radius: 6px; 
-        margin-bottom: 20px; 
-        font-size: 14px; 
-    }
-    .error { 
-        background: #ffebee; 
-        color: #c62828; 
-        padding: 15px; 
-        border-radius: 8px; 
-        margin: 15px 0; 
-        display: none; 
-        border-left: 4px solid #d32f2f;
-    }
-    .success { 
-        background: #e8f5e8; 
-        color: #2e7d32; 
-        padding: 15px; 
-        border-radius: 8px; 
-        margin: 15px 0; 
-        border-left: 4px solid #4caf50;
-    }
-    .loading { 
-        text-align: center; 
-        padding: 40px; 
-        display: none; 
-    }
-    .spinner { 
-        border: 4px solid #f3f3f3; 
-        border-top: 4px solid #1e3c72; 
-        border-radius: 50%; 
-        width: 50px; 
-        height: 50px; 
-        animation: spin 1s linear infinite; 
-        margin: 0 auto 20px; 
-    }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    .user-info { 
-        background: #e3f2fd; 
-        padding: 15px; 
-        border-radius: 8px; 
-        margin-bottom: 20px; 
-        text-align: center; 
-        font-weight: 500;
-    }
-    .user-info a { color: #1976d2; text-decoration: none; font-weight: 600; }
-    .user-info a:hover { text-decoration: underline; }
-    .image-upload { 
-        background: #f8f9fa; 
-        border: 3px dashed #dee2e6; 
-        border-radius: 10px; 
-        padding: 30px; 
-        text-align: center; 
-        margin: 20px 0; 
-        cursor: pointer; 
-        transition: all 0.3s ease;
-    }
-    .image-upload:hover { border-color: #1e3c72; background: #e3f2fd; }
-    .image-upload input[type="file"] { display: none; }
-    .or-divider { 
-        text-align: center; 
-        margin: 25px 0; 
-        color: #666; 
-        font-weight: 600; 
-        position: relative; 
-    }
-    .or-divider:before { 
-        content: ''; 
-        position: absolute; 
-        top: 50%; 
-        left: 0; 
-        right: 0; 
-        height: 1px; 
-        background: #dee2e6; 
-        z-index: 1; 
-    }
-    .or-divider span { 
-        background: white; 
-        padding: 0 20px; 
-        position: relative; 
-        z-index: 2; 
-    }
-    .part-badge { 
-        display: inline-block; 
-        color: white; 
-        padding: 4px 10px; 
-        border-radius: 6px; 
-        font-size: 12px; 
-        font-weight: bold; 
-        margin-left: 10px; 
-    }
-    .part-badge.oem { background: #28a745; }
-    .part-badge.aftermarket { background: #17a2b8; }
-    .part-badge.premium { background: #6f42c1; }
-    .product-grid { 
-        display: grid; 
-        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
-        gap: 20px; 
-        margin-top: 25px; 
-    }
-    .product-card {
+def render_page(title, content):
+    """Renderizar página con template base - SIN CSS PROBLEMÁTICO"""
+    template = f'''<!DOCTYPE html>
+<html lang="es">
+<head>
+    <title>{html.escape(title)}</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {{ 
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); 
+            min-height: 100vh; 
+            padding: 15px; 
+        }}
+        .main-container {{ 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background: white; 
+            padding: 30px; 
+            border-radius: 12px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2); 
+        }}
+        h1 {{ color: #1e3c72; text-align: center; margin-bottom: 10px; }}
+        .subtitle {{ text-align: center; color: #666; margin-bottom: 30px; }}
+        .btn-primary {{ background: #1e3c72; border-color: #1e3c72; }}
+        .btn-primary:hover {{ background: #2a5298; border-color: #2a5298; }}
+        .product-card {{ 
+            border: 1px solid #ddd; 
+            border-radius: 10px; 
+            padding: 20px; 
+            margin-bottom: 20px;
+            background: white; 
+        }}
+        .product-title {{ color: #1e3c72; font-weight: 600; }}
+        .product-price {{ font-size: 1.4em; font-weight: bold; color: #28a745; }}
+        .part-badge {{ 
+            display: inline-block; 
+            color: white; 
+            padding: 4px 10px; 
+            border-radius: 6px; 
+            font-size: 12px; 
+            font-weight: bold; 
+            margin-left: 10px; 
+        }}
+        .part-badge.oem {{ background: #28a745; }}
+        .part-badge.aftermarket {{ background: #17a2b8; }}
+        .part-badge.premium {{ background: #6f42c1; }}
+        .api-status.configured {{ background: #d4edda; color: #155724; }}
+        .api-status.not-configured {{ background: #f8d7da; color: #721c24; }}
+    </style>
+</head>
+<body>
+    <div class="main-container">
+        {content}
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>'''
+    return template
+
+# ==============================================================================
+# RUTAS DE LA APLICACIÓN
+# ==============================================================================
+
+@app.route('/')
+def home():
+    """Página principal con búsqueda pública"""
+    try:
+        vehicle_data_json = json.dumps(VEHICLE_DATABASE)
+        
+        serpapi_key = os.environ.get('SERPAPI_KEY')
+        if serpapi_key and serpapi_key.strip():
+            api_status_html = '''
+            <div class="alert alert-success api-status configured">
+                <strong>✅ SerpAPI Configurado</strong><br>
+                <small>Mostrando resultados reales de tiendas de repuestos</small>
+            </div>
+            '''
+        else:
+            api_status_html = '''
+            <div class="alert alert-warning api-status not-configured">
+                <strong>❌ SerpAPI No Configurado</strong><br>
+                <small>Configure la variable de entorno SERPAPI_KEY para que la aplicación funcione</small>
+            </div>
+            '''
+        
+        home_content = f'''
+            <h1>🔧 Auto Parts Finder USA</h1>
+            <div class="subtitle">Encuentra repuestos automotrices en las mejores tiendas de Estados Unidos</div>
+            
+            {api_status_html}
+            
+            <div class="alert alert-info">
+                💡 <strong>Consejos para mejores resultados:</strong><br>
+                • Incluye año, marca y modelo de tu vehículo<br>
+                • Usa nombres específicos como "brake pads", "oil filter", "spark plugs"<br>
+                • Sé específico: "honda civic brake pads 2018" es mejor que solo "brake pads"
+            </div>
+            
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h5 class="card-title">🚗 Información del Vehículo</h5>
+                    <div class="row">
+                        <div class="col-md-4">
+                            <select id="vehicleYear" class="form-select">
+                                <option value="">Seleccionar año</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <select id="vehicleMake" class="form-select">
+                                <option value="">Seleccionar marca</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <select id="vehicleModel" class="form-select">
+                                <option value="">Seleccionar modelo</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="input-group mb-3">
+                <input type="text" id="searchQuery" class="form-control" placeholder="¿Qué repuesto necesitas? Ejemplo: brake pads, oil filter, spark plugs..." maxlength="150" required>
+                <button class="btn btn-primary" onclick="searchParts()">🔍 Buscar Repuestos</button>
+            </div>
+            
+            <div class="text-center mb-3">
+                <span class="text-muted">O</span>
+            </div>
+            
+            <div class="card mb-4" style="cursor: pointer;" onclick="document.getElementById('imageInput').click()">
+                <div class="card-body text-center">
+                    <input type="file" id="imageInput" accept="image/*" onchange="handleImageUpload(event)" style="display: none;">
+                    <div>📷 Subir foto del repuesto para identificación automática</div>
+                    <small class="text-muted">Formatos soportados: JPG, PNG, WEBP (máx. 16MB)</small>
+                </div>
+            </div>
+            
+            <div id="searchLoading" class="text-center" style="display: none;">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="mt-2">Buscando repuestos en tiendas especializadas...</p>
+            </div>
+            
+            <div id="searchError" class="alert alert-danger" style="display: none;"></div>
+            
+            <div id="searchResults"></div>
+            
+            <div class="card mt-4">
+                <div class="card-body text-center">
+                    <h5 class="card-title">¿Necesitas más funciones?</h5>
+                    <p class="card-text">Inicia sesión para guardar búsquedas y acceder a funciones avanzadas</p>
+                    <a href="/login" class="btn btn-primary">Iniciar Sesión</a>
+                </div>
+            </div>
+        
+        <script>
+        const vehicleData = {vehicle_data_json};
+        const hasAPI = {'true' if serpapi_key and serpapi_key.strip() else 'false'};
+        
+        function initVehicleSelectors() {{
+            const yearSelect = document.getElementById('vehicleYear');
+            const makeSelect = document.getElementById('vehicleMake');
+            
+            const years = [...vehicleData.years].reverse();
+            years.forEach(year => {{
+                const option = document.createElement('option');
+                option.value = year;
+                option.textContent = year;
+                yearSelect.appendChild(option);
+            }});
+            
+            Object.keys(vehicleData.makes).forEach(make => {{
+                const option = document.createElement('option');
+                option.value = make;
+                option.textContent = make.charAt(0).toUpperCase() + make.slice(1);
+                makeSelect.appendChild(option);
+            }});
+            
+            makeSelect.addEventListener('change', updateModels);
+        }}
+        
+        function updateModels() {{
+            const make
