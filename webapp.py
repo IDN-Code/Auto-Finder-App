@@ -1,35 +1,4 @@
-.part-badge {{ 
-            display: inline-block; 
-            color: white; 
-            padding: 4px 10px; 
-            border-radius: 6px; 
-            font-size: 12px; 
-            font-weight: bold; 
-            margin-left: 10px; 
-        }}
-        .part-badge.verified {{ background: #28a745; }}
-        .part-badge.demo {{ background: #ff9800; }}
-        .part-badge.oem {{ background: #28a745; }}
-        .part-badge.aftermarket {{ background: #17a2b8; }}
-        .product-grid {{ 
-            display: grid; 
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
-            gap: 20px; 
-            margin-top: 25px; 
-        }}
-        .product-card {{ 
-            border: 1px solid #ddd; 
-            border-radius: 10px; 
-            padding: 20px; 
-            background: white; 
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1); 
-            transition: transform 0.2s, box-shadow 0.2s;
-        }}
-        .product-card:hover {{ 
-            transform: translateY(-2px); 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.15); 
-        }}
-        .product-card.verified {{ border-color: #28a745; border-width: 2px; }}
+.product-card.verified {{ border-color: #28a745; border-width: 2px; }}
         .product-card.demo {{ border-color: #ff9800; border-width: 2px; }}
         .product-title {{ 
             margin: 0 0 12px 0; 
@@ -246,52 +215,77 @@ def home():
             hideError();
             clearResults();
             
-            // Agregar al historial
-            addToHistory(query);
-            
             const formData = new FormData();
-            formData.append('query', query);
+            if (query) formData.append('query', query);
+            if (imageInput.files[0]) formData.append('image', imageInput.files[0]);
+            if (vehicleYear) formData.append('vehicle_year', vehicleYear);
+            if (vehicleMake) formData.append('vehicle_make', vehicleMake);
+            if (vehicleModel) formData.append('vehicle_model', vehicleModel);
             
             try {{
-                const response = await fetch('/api/search-parts', {{
+                console.log('🌐 Enviando petición a /api/search-parts-public...');
+                
+                const response = await fetch('/api/search-parts-public', {{
                     method: 'POST',
                     body: formData
                 }});
                 
+                console.log('📥 Respuesta recibida:', response.status, response.statusText);
+                
                 const result = await response.json();
+                console.log('📊 Datos recibidos:', result);
                 
                 if (result.success) {{
-                    displayResults(result.products);
+                    console.log('✅ Búsqueda exitosa, mostrando resultados...');
+                    displayResults(result.products, result.search_info || {{}});
                 }} else {{
-                    showError(result.message || 'Error en la búsqueda');
+                    console.error('❌ Error en búsqueda:', result.message);
+                    showError(result.message || 'Error en la búsqueda. Intenta nuevamente.');
                 }}
             }} catch (error) {{
-                console.error('Error:', error);
-                showError('Error de conexión');
+                console.error('❌ Error de conexión:', error);
+                showError('Error de conexión. Verifica tu internet e intenta nuevamente.');
             }} finally {{
                 showLoading(false);
             }}
         }}
         
-        function displayResults(products) {{
+        function displayResults(products, searchInfo) {{
+            console.log('📊 Productos a mostrar:', products);
+            console.log('📋 Info de búsqueda:', searchInfo);
+            
             if (!products || products.length === 0) {{
-                showError('No se encontraron repuestos');
+                console.error('❌ No hay productos para mostrar');
+                showError('No se encontraron repuestos. Intenta con otros términos de búsqueda.');
                 return;
             }}
             
             const resultsContainer = document.getElementById('searchResults');
             
+            // Verificar si hay errores
+            if (products[0] && products[0].search_source === 'error') {{
+                console.error('❌ Error en productos:', products[0]);
+                showError('Error en la búsqueda: ' + (products[0].error_message || 'Error desconocido'));
+                return;
+            }}
+            
             // Contar resultados reales vs demo
             const realResults = products.filter(p => p.serpapi_verified === true);
-            const resultType = realResults.length > 0 ? 'Resultados Verificados Premium' : 'Resultados Demo Premium';
+            const demoResults = products.filter(p => p.serpapi_verified === false);
+            const resultType = realResults.length > 0 ? 'Resultados Verificados de SerpAPI' : 'Resultados Demo';
             const resultColor = realResults.length > 0 ? '#28a745' : '#ff9800';
             const resultIcon = realResults.length > 0 ? '✅' : '⚠️';
             
+            console.log(`📊 Resultados: ${{realResults.length}} reales, ${{demoResults.length}} demo`);
+            
             let html = `
                 <div style="background: linear-gradient(135deg, #e8f5e8 0%, #f0f8f0 100%); padding: 25px; border-radius: 12px; margin: 30px 0; border-left: 5px solid ${{resultColor}};">
-                    <h3 style="color: #155724;">${{resultIcon}} ${{resultType}} (${{products.length}} encontrados)</h3>
+                    <h3 style="color: #155724; margin-bottom: 10px;">
+                        ${{resultIcon}} ${{resultType}} (${{products.length}} encontrados)
+                    </h3>
+                    <p style="color: #155724;"><strong>Búsqueda:</strong> ${{searchInfo.query || 'Imagen'}} ${{searchInfo.vehicle ? '| Vehículo: ' + searchInfo.vehicle : ''}}</p>
                     ${{realResults.length > 0 ? 
-                        '<p style="color: #155724; font-size: 14px;">🔗 Enlaces directos verificados a tiendas reales</p>' : 
+                        '<p style="color: #155724; font-size: 14px; margin-top: 8px;">🔗 Links directos a tiendas reales de repuestos</p>' : 
                         '<p style="color: #856404; font-size: 14px;">⚠️ Configure SERPAPI_KEY para resultados reales</p>'
                     }}
                 </div>
@@ -313,50 +307,15 @@ def home():
                         </h4>
                         <div class="product-price">${{product.price}}</div>
                         <div class="product-store"><strong>Tienda:</strong> ${{product.source}}</div>
-                        <div style="margin: 10px 0;">
-                            <button onclick="saveFavorite('${{product.title.replace(/'/g, "\\'")}}')" style="background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; margin-right: 10px;">
-                                ❤ Guardar
-                            </button>
-                            <a href="${{product.link}}" target="_blank" class="product-link ${{linkClass}}">
-                                ${{isReal ? 'Ver Producto Real →' : 'Buscar en Google →'}}
-                            </a>
-                        </div>
+                        <a href="${{product.link}}" target="_blank" class="product-link ${{linkClass}}">
+                            ${{isReal ? 'Ver Producto Real →' : 'Buscar en Google →'}}
+                        </a>
                     </div>
                 `;
             }});
             
             html += '</div>';
             resultsContainer.innerHTML = html;
-        }}
-        
-        function addToHistory(query) {{
-            searchHistory.unshift(query);
-            searchHistory = [...new Set(searchHistory)].slice(0, 5);
-            localStorage.setItem('autoparts_search_history', JSON.stringify(searchHistory));
-            updateHistoryDisplay();
-        }}
-        
-        function updateHistoryDisplay() {{
-            const historyContainer = document.getElementById('searchHistory');
-            if (searchHistory.length === 0) {{
-                historyContainer.innerHTML = '<p style="color: #666; font-style: italic;">Tus búsquedas aparecerán aquí...</p>';
-                return;
-            }}
-            
-            let html = '';
-            searchHistory.forEach(query => {{
-                html += `
-                    <span style="display: inline-block; background: #e3f2fd; color: #1976d2; padding: 5px 10px; border-radius: 15px; margin: 5px 5px 5px 0; cursor: pointer;" 
-                          onclick="document.getElementById('searchQuery').value = '${{query.replace(/'/g, "\\'")}}'; searchParts();">
-                        ${{query}}
-                    </span>
-                `;
-            }});
-            historyContainer.innerHTML = html;
-        }}
-        
-        function saveFavorite(title) {{
-            alert('Repuesto guardado en favoritos: ' + title);
         }}
         
         function showLoading(show) {{
@@ -377,15 +336,10 @@ def home():
             document.getElementById('searchResults').innerHTML = '';
         }}
         
-        // Inicializar
-        document.addEventListener('DOMContentLoaded', function() {{
-            updateHistoryDisplay();
-            
-            document.getElementById('searchQuery').addEventListener('keypress', function(e) {{
-                if (e.key === 'Enter') {{
-                    searchParts();
-                }}
-            }});
+        document.getElementById('searchQuery').addEventListener('keypress', function(e) {{
+            if (e.key === 'Enter') {{
+                searchParts();
+            }}
         }});
         </script>
         '''
@@ -713,82 +667,7 @@ if __name__ == '__main__':
         print("   - Variables de entorno")
         print("   - Dependencias instaladas")
         if not serpapi_key:
-            print("   - Configure SERPAPI_KEY para resultados reales")true);
-            hideError();
-            clearResults();
-            
-            const formData = new FormData();
-            if (query) formData.append('query', query);
-            if (imageInput.files[0]) formData.append('image', imageInput.files[0]);
-            if (vehicleYear) formData.append('vehicle_year', vehicleYear);
-            if (vehicleMake) formData.append('vehicle_make', vehicleMake);
-            if (vehicleModel) formData.append('vehicle_model', vehicleModel);
-            
-            try {{
-                console.log('🌐 Enviando petición a /api/search-parts-public...');
-                
-                const response = await fetch('/api/search-parts-public', {{
-                    method: 'POST',
-                    body: formData
-                }});
-                
-                console.log('📥 Respuesta recibida:', response.status, response.statusText);
-                
-                const result = await response.json();
-                console.log('📊 Datos recibidos:', result);
-                
-                if (result.success) {{
-                    console.log('✅ Búsqueda exitosa, mostrando resultados...');
-                    displayResults(result.products, result.search_info || {{}});
-                }} else {{
-                    console.error('❌ Error en búsqueda:', result.message);
-                    showError(result.message || 'Error en la búsqueda. Intenta nuevamente.');
-                }}
-            }} catch (error) {{
-                console.error('❌ Error de conexión:', error);
-                showError('Error de conexión. Verifica tu internet e intenta nuevamente.');
-            }} finally {{
-                showLoading(false);
-            }}
-        }}
-        
-        function displayResults(products, searchInfo) {{
-            console.log('📊 Productos a mostrar:', products);
-            console.log('📋 Info de búsqueda:', searchInfo);
-            
-            if (!products || products.length === 0) {{
-                console.error('❌ No hay productos para mostrar');
-                showError('No se encontraron repuestos. Intenta con otros términos de búsqueda.');
-                return;
-            }}
-            
-            const resultsContainer = document.getElementById('searchResults');
-            
-            // Verificar si hay errores
-            if (products[0] && products[0].search_source === 'error') {{
-                console.error('❌ Error en productos:', products[0]);
-                showError('Error en la búsqueda: ' + (products[0].error_message || 'Error desconocido'));
-                return;
-            }}
-            
-            // Contar resultados reales vs demo
-            const realResults = products.filter(p => p.serpapi_verified === true);
-            const demoResults = products.filter(p => p.serpapi_verified === false);
-            const resultType = realResults.length > 0 ? 'Resultados Verificados de SerpAPI' : 'Resultados Demo';
-            const resultColor = realResults.length > 0 ? '#28a745' : '#ff9800';
-            const resultIcon = realResults.length > 0 ? '✅' : '⚠️';
-            
-            console.log(`📊 Resultados: ${{realResults.length}} reales, ${{demoResults.length}} demo`);
-            
-            let html = `
-                <div style="background: linear-gradient(135deg, #e8f5e8 0%, #f0f8f0 100%); padding: 25px; border-radius: 12px; margin: 30px 0; border-left: 5px solid ${{resultColor}};">
-                    <h3 style="color: #155724; margin-bottom: 10px;">
-                        ${{resultIcon}} ${{resultType}} (${{products.length}} encontrados)
-                    </h3>
-                    <p style="color: #155724;"><strong>Búsqueda:</strong> ${{searchInfo.query || 'Imagen'}} ${{searchInfo.vehicle ? '| Vehículo: ' + searchInfo.vehicle : ''}}</p>
-                    ${{realResults.length > 0 ? 
-                        '<p style="color: #155724; font-size: 14px; margin-top: 8px;">🔗 Links directos a tiendas reales de repuestos</p>' : 
-                        '<p style="color: #856404; font-size: 14px; margin-top: 8px;">⚠️ Configure SERPAPI_KEY para obtener resultados reales de tiendas</p>'
+            print("   - Configure SERPAPI_KEY para resultados reales")px; margin-top: 8px;">⚠️ Configure SERPAPI_KEY para obtener resultados reales de tiendas</p>'
                     }}
                 </div>
                 <div class="product-grid">
@@ -1065,8 +944,7 @@ def search_page():
         <div class="container">
             <div class="user-info">
                 👋 Bienvenido, <strong>{html.escape(user_name)}</strong> | 
-                <a href="/logout">Cerrar Sesión</a> | 
-                <a href="/profile">Mi Perfil</a>
+                <a href="/logout">Cerrar Sesión</a>
             </div>
             
             <h1>🔧 Auto Parts Finder PRO</h1>
@@ -1096,19 +974,9 @@ def search_page():
             <div class="error" id="searchError"></div>
             
             <div id="searchResults"></div>
-            
-            <!-- Historial de búsquedas -->
-            <div style="margin-top: 40px; padding: 20px; background: #f8f9fa; border-radius: 10px;">
-                <h3 style="color: #1e3c72;">📋 Búsquedas Recientes</h3>
-                <div id="searchHistory">
-                    <p style="color: #666; font-style: italic;">Tus búsquedas aparecerán aquí...</p>
-                </div>
-            </div>
         </div>
         
         <script>
-        let searchHistory = JSON.parse(localStorage.getItem('autoparts_search_history') || '[]');
-        
         async function searchParts() {{
             const query = document.getElementById('searchQuery').value.trim();
             
@@ -1117,7 +985,53 @@ def search_page():
                 return;
             }}
             
-            showLoading(# webapp.py - Auto Parts Finder USA - VERSIÓN CORREGIDA CON DEBUG SERPAPI
+            showLoading(true);
+            hideError();
+            clearResults();
+            
+            const formData = new FormData();
+            formData.append('query', query);
+            
+            try {{
+                const response = await fetch('/api/search-parts', {{
+                    method: 'POST',
+                    body: formData
+                }});
+                
+                const result = await response.json();
+                
+                if (result.success) {{
+                    displayResults(result.products);
+                }} else {{
+                    showError(result.message || 'Error en la búsqueda');
+                }}
+            }} catch (error) {{
+                console.error('Error:', error);
+                showError('Error de conexión');
+            }} finally {{
+                showLoading(false);
+            }}
+        }}
+        
+        function displayResults(products) {{
+            if (!products || products.length === 0) {{
+                showError('No se encontraron repuestos');
+                return;
+            }}
+            
+            const resultsContainer = document.getElementById('searchResults');
+            
+            const realResults = products.filter(p => p.serpapi_verified === true);
+            const resultType = realResults.length > 0 ? 'Resultados Verificados Premium' : 'Resultados Demo Premium';
+            const resultColor = realResults.length > 0 ? '#28a745' : '#ff9800';
+            const resultIcon = realResults.length > 0 ? '✅' : '⚠️';
+            
+            let html = `
+                <div style="background: linear-gradient(135deg, #e8f5e8 0%, #f0f8f0 100%); padding: 25px; border-radius: 12px; margin: 30px 0; border-left: 5px solid ${{resultColor}};">
+                    <h3 style="color: #155724;">${{resultIcon}} ${{resultType}} (${{products.length}} encontrados)</h3>
+                    ${{realResults.length > 0 ? 
+                        '<p style="color: #155724; font-size: 14px;">🔗 Enlaces directos verificados a tiendas reales</p>' : 
+                        '<p style="color: #856404; font-size: 14# webapp.py - Auto Parts Finder USA - VERSIÓN CORREGIDA CON DEBUG SERPAPI
 from flask import Flask, request, jsonify, session, redirect, url_for, render_template_string, flash
 import requests
 import os
@@ -1566,37 +1480,6 @@ class AutoPartsFinder:
                 'demo_mode': True
             }]
 
-    def _generate_error_fallback(self, error_message):
-        """Generar mensaje de error cuando falla la API"""
-        return [{
-            'title': '❌ Error en la búsqueda de repuestos',
-            'price': 'N/A',
-            'price_numeric': 0.0,
-            'source': 'Sistema - Error',
-            'link': '/',
-            'rating': '',
-            'reviews': '',
-            'part_type': 'Error',
-            'search_source': 'error',
-            'error_message': error_message,
-            'serpapi_verified': False
-        }]
-
-    def _generate_no_results_message(self, query):
-        """Generar mensaje cuando no hay resultados en SerpAPI"""
-        return [{
-            'title': f'No se encontraron repuestos para: "{query}"',
-            'price': 'N/A',
-            'price_numeric': 0.0,
-            'source': 'Sistema - Sin resultados',
-            'link': f"https://www.google.com/search?tbm=shop&q={quote_plus(query + ' auto parts')}",
-            'rating': '',
-            'reviews': '',
-            'part_type': 'Info',
-            'search_source': 'no_results',
-            'serpapi_verified': False
-        }]
-
     def _build_search_query(self, query, vehicle_info):
         """Construir query de búsqueda optimizada"""
         try:
@@ -1807,4 +1690,28 @@ def render_page(title, content):
             border-radius: 6px; 
             font-size: 12px; 
             font-weight: bold; 
-            margin-left
+            margin-left: 10px; 
+        }}
+        .part-badge.verified {{ background: #28a745; }}
+        .part-badge.demo {{ background: #ff9800; }}
+        .part-badge.oem {{ background: #28a745; }}
+        .part-badge.aftermarket {{ background: #17a2b8; }}
+        .product-grid {{ 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
+            gap: 20px; 
+            margin-top: 25px; 
+        }}
+        .product-card {{ 
+            border: 1px solid #ddd; 
+            border-radius: 10px; 
+            padding: 20px; 
+            background: white; 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1); 
+            transition: transform 0.2s, box-shadow 0.2s;
+        }}
+        .product-card:hover {{ 
+            transform: translateY(-2px); 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15); 
+        }}
+        .product-card.verified {{ border-color
