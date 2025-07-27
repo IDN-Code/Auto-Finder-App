@@ -1,615 +1,4 @@
-# webapp.py - Auto Parts Finder USA - VERSIÓN PROFESIONAL SIN DEMO
-from flask import Flask, request, jsonify, session, redirect, url_for, render_template_string, flash
-import requests
-import os
-import re
-import html
-import time
-import io
-import random
-import logging
-from datetime import datetime, timedelta
-from urllib.parse import urlparse, quote_plus, urljoin
-from functools import wraps
-import json
-
-# Imports opcionales con manejo de errores
-try:
-    from PIL import Image
-    PIL_AVAILABLE = True
-    print("✅ PIL (Pillow) disponible")
-except ImportError:
-    PIL_AVAILABLE = False
-    print("⚠ PIL no disponible")
-
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-    print("✅ Gemini disponible")
-except ImportError:
-    genai = None
-    GEMINI_AVAILABLE = False
-    print("⚠ Gemini no disponible")
-
-try:
-    from bs4 import BeautifulSoup
-    BS4_AVAILABLE = True
-    print("✅ BeautifulSoup4 disponible")
-except ImportError:
-    BS4_AVAILABLE = False
-    print("⚠ BeautifulSoup4 no disponible")
-
-# Configuración de logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Función para debug de variables de entorno
-def debug_environment():
-    """Debug completo de variables de entorno"""
-    print("=" * 50)
-    print("🔍 DEBUG: ANÁLISIS DE VARIABLES DE ENTORNO")
-    print("=" * 50)
-    
-    # Verificar SERPAPI_KEY específicamente
-    serpapi_key = os.environ.get('SERPAPI_KEY')
-    if serpapi_key:
-        print(f"✅ SERPAPI_KEY encontrada: {serpapi_key[:4]}...{serpapi_key[-4:]}")
-        print(f"✅ Longitud de la key: {len(serpapi_key)} caracteres")
-        print(f"✅ Tipo: {type(serpapi_key)}")
-        print(f"✅ Válida (no vacía): {bool(serpapi_key.strip())}")
-    else:
-        print("❌ SERPAPI_KEY no encontrada")
-        print("❌ LA APLICACIÓN REQUIERE SERPAPI_KEY PARA FUNCIONAR")
-    
-    print("=" * 50)
-
-# Llamar debug al inicio
-debug_environment()
-
-# Inicializar Flask app
-app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'auto-parts-finder-secret-key-2025')
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SECURE'] = True if os.environ.get('RENDER') else False
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
-
-# Base de datos de vehículos populares en USA
-VEHICLE_DATABASE = {
-    'makes': {
-        'chevrolet': ['silverado', 'equinox', 'malibu', 'tahoe', 'suburban', 'traverse', 'camaro', 'corvette'],
-        'ford': ['f150', 'f250', 'f350', 'escape', 'explorer', 'mustang', 'edge', 'expedition'],
-        'toyota': ['camry', 'corolla', 'rav4', 'highlander', 'prius', 'tacoma', 'tundra', 'sienna'],
-        'honda': ['civic', 'accord', 'crv', 'pilot', 'odyssey', 'ridgeline', 'passport'],
-        'nissan': ['altima', 'sentra', 'rogue', 'murano', 'pathfinder', 'titan', 'frontier'],
-        'jeep': ['wrangler', 'grand cherokee', 'cherokee', 'compass', 'renegade', 'gladiator'],
-        'ram': ['1500', '2500', '3500', 'promaster'],
-        'gmc': ['sierra', 'terrain', 'acadia', 'yukon', 'canyon']
-    },
-    'years': list(range(1990, 2025)),
-    'common_parts': [
-        'brake pads', 'brake rotors', 'oil filter', 'air filter', 'spark plugs', 
-        'battery', 'alternator', 'starter', 'radiator', 'water pump'
-    ]
-}
-
-# Variables globales para componentes
-firebase_auth = None
-auto_parts_finder = None
-
-# ==============================================================================
-# CLASES PRINCIPALES
-# ==============================================================================
-
-class FirebaseAuth:
-    """Sistema de autenticación real"""
-    
-    def __init__(self):
-        self.firebase_web_api_key = os.environ.get("FIREBASE_WEB_API_KEY")
-        self.test_users = {
-            "admin@autoparts.com": {
-                "password": "AutoParts2025!",
-                "name": "Admin User",
-                "role": "admin"
-            },
-            "user@autoparts.com": {
-                "password": "UserPass123!",
-                "name": "Regular User", 
-                "role": "user"
-            }
-        }
-        logger.info(f"Firebase Auth configurado: {bool(self.firebase_web_api_key)}")
-    
-    def login_user(self, email, password):
-        """Login con usuarios reales configurados"""
-        try:
-            if email in self.test_users and self.test_users[email]["password"] == password:
-                user_data = self.test_users[email]
-                return {
-                    'success': True,
-                    'message': 'Autenticación exitosa',
-                    'user_data': {
-                        'user_id': f'user_{hash(email)}',
-                        'email': email,
-                        'display_name': user_data['name'],
-                        'role': user_data['role'],
-                        'id_token': f'token_{hash(email + str(time.time()))}'
-                    }
-                }
-            else:
-                return {
-                    'success': False,
-                    'message': 'Credenciales incorrectas',
-                    'user_data': None
-                }
-        except Exception as e:
-            logger.error(f"Error en login: {e}")
-            return {
-                'success': False,
-                'message': 'Error interno en autenticación',
-                'user_data': None
-            }
-    
-    def set_user_session(self, user_data):
-        """Establecer sesión de usuario"""
-        try:
-            session['user_id'] = user_data['user_id']
-            session['user_name'] = user_data['display_name']
-            session['user_email'] = user_data['email']
-            session['user_role'] = user_data.get('role', 'user')
-            session['login_time'] = datetime.now().isoformat()
-            session.permanent = True
-        except Exception as e:
-            logger.error(f"Error estableciendo sesión: {e}")
-    
-    def clear_user_session(self):
-        """Limpiar sesión de usuario"""
-        try:
-            session.clear()
-        except Exception as e:
-            logger.error(f"Error limpiando sesión: {e}")
-    
-    def is_user_logged_in(self):
-        """Verificar si el usuario está logueado"""
-        try:
-            return 'user_id' in session and session.get('user_id') is not None
-        except Exception as e:
-            logger.error(f"Error verificando login: {e}")
-            return False
-    
-    def get_current_user(self):
-        """Obtener usuario actual"""
-        try:
-            if not self.is_user_logged_in():
-                return None
-            return {
-                'user_id': session.get('user_id'),
-                'user_name': session.get('user_name'),
-                'user_email': session.get('user_email'),
-                'user_role': session.get('user_role', 'user')
-            }
-        except Exception as e:
-            logger.error(f"Error obteniendo usuario: {e}")
-            return None
-
-class AutoPartsFinder:
-    """Buscador profesional de repuestos automotrices con SerpAPI"""
-    
-    def __init__(self):
-        print("\n🔧 INICIALIZANDO AutoPartsFinder...")
-        
-        # API key es REQUERIDA para funcionar
-        self.api_key = os.environ.get('SERPAPI_KEY', '').strip()
-        
-        if not self.api_key:
-            logger.error("❌ SERPAPI_KEY es requerida para el funcionamiento de la aplicación")
-            print("❌ SERPAPI_KEY es REQUERIDA. La aplicación no funcionará sin ella.")
-            raise ValueError("SERPAPI_KEY es requerida para el funcionamiento de la aplicación")
-        
-        print(f"✅ SerpAPI configurado correctamente")
-        print(f"✅ Key: {self.api_key[:4]}...{self.api_key[-4:]} (longitud: {len(self.api_key)})")
-        
-        self.base_url = "https://serpapi.com/search"
-        logger.info(f"✅ SerpAPI inicializado correctamente")
-        
-        print(f"🔑 AutoPartsFinder inicializado - MODO PROFESIONAL\n")
-    
-    def search_auto_parts(self, query=None, image_content=None, vehicle_info=None):
-        """Búsqueda profesional de repuestos usando SerpAPI"""
-        try:
-            # Construir query final
-            final_query = self._build_search_query(query, vehicle_info)
-            
-            if not final_query:
-                return {
-                    'success': False,
-                    'message': 'Término de búsqueda requerido',
-                    'products': []
-                }
-            
-            logger.info(f"🔍 Buscando: '{final_query}'")
-            print(f"🔍 DEBUG: Query final = '{final_query}'")
-            
-            # Hacer llamada real a SerpAPI
-            print("🚀 DEBUG: Llamando a SerpAPI...")
-            return self._search_with_serpapi(final_query)
-            
-        except Exception as e:
-            logger.error(f"❌ Error en búsqueda: {e}")
-            print(f"❌ DEBUG: Error en search_auto_parts = {e}")
-            return {
-                'success': False,
-                'message': f'Error en la búsqueda: {str(e)}',
-                'products': []
-            }
-    
-    def _search_with_serpapi(self, query):
-        """Realizar búsqueda real usando SerpAPI"""
-        try:
-            # Parámetros optimizados para SerpAPI (Google Shopping)
-            params = {
-                'api_key': self.api_key,
-                'engine': 'google_shopping',
-                'q': query + ' auto parts automotive',
-                'location': 'United States',
-                'hl': 'en',
-                'gl': 'us',
-                'num': 20,
-                'sort_by': 'relevance'
-            }
-            
-            logger.info(f"🔍 Llamando a SerpAPI con query: {params['q']}")
-            print(f"🌐 DEBUG: Haciendo petición REAL a SerpAPI...")
-            
-            # Hacer petición HTTP con timeout
-            response = requests.get(self.base_url, params=params, timeout=20)
-            print(f"📊 DEBUG: Status HTTP: {response.status_code}")
-            
-            if response.status_code != 200:
-                logger.error(f"❌ Error HTTP {response.status_code}")
-                return {
-                    'success': False,
-                    'message': f'Error del servicio de búsqueda (HTTP {response.status_code})',
-                    'products': []
-                }
-            
-            data = response.json()
-            print(f"📊 DEBUG: Respuesta de SerpAPI recibida")
-            
-            # Verificar si hay error en la respuesta
-            if 'error' in data:
-                logger.error(f"❌ Error de SerpAPI: {data['error']}")
-                return {
-                    'success': False,
-                    'message': f"Error de SerpAPI: {data['error']}",
-                    'products': []
-                }
-            
-            # Procesar resultados reales
-            shopping_results = data.get('shopping_results', [])
-            print(f"📊 DEBUG: {len(shopping_results)} resultados REALES de shopping")
-            
-            if not shopping_results:
-                logger.warning("⚠️ No se encontraron resultados en SerpAPI")
-                return {
-                    'success': True,
-                    'message': 'No se encontraron productos para esta búsqueda',
-                    'products': []
-                }
-            
-            # Convertir a formato interno
-            processed_results = []
-            for item in shopping_results[:15]:
-                processed_item = self._process_serpapi_result(item)
-                if processed_item:
-                    processed_results.append(processed_item)
-            
-            print(f"✅ DEBUG: {len(processed_results)} resultados REALES procesados")
-            logger.info(f"✅ Procesados {len(processed_results)} resultados REALES de SerpAPI")
-            
-            return {
-                'success': True,
-                'message': f'Se encontraron {len(processed_results)} productos',
-                'products': processed_results
-            }
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Error de conexión con SerpAPI: {e}")
-            return {
-                'success': False,
-                'message': 'Error de conexión con el servicio de búsqueda',
-                'products': []
-            }
-        except requests.exceptions.Timeout:
-            logger.error("❌ Timeout en SerpAPI")
-            return {
-                'success': False,
-                'message': 'Timeout en el servicio de búsqueda',
-                'products': []
-            }
-        except Exception as e:
-            logger.error(f"❌ Error inesperado en SerpAPI: {e}")
-            return {
-                'success': False,
-                'message': f'Error inesperado: {str(e)}',
-                'products': []
-            }
-
-    def _process_serpapi_result(self, item):
-        """Procesar un resultado individual de SerpAPI"""
-        try:
-            # Extraer datos verificados directamente de SerpAPI
-            title = item.get('title', '').strip()
-            price = item.get('price', '')
-            source = item.get('source', '')
-            link = item.get('link', '')
-            
-            # Validaciones básicas
-            if not title or not link:
-                return None
-            
-            # Validar que sea un link real
-            if not link.startswith(('http://', 'https://')):
-                return None
-            
-            # Limpiar y validar precio
-            price_numeric = 0.0
-            price_display = 'Consultar precio'
-            
-            if price:
-                try:
-                    # Extraer número del precio
-                    price_clean = re.sub(r'[^\d\.]', '', str(price))
-                    if price_clean:
-                        price_numeric = float(price_clean)
-                        price_display = f"${price_numeric:.2f}"
-                    else:
-                        price_display = str(price)
-                except Exception:
-                    price_display = str(price) if price else 'Consultar precio'
-            
-            # Extraer información adicional
-            rating = item.get('rating', '')
-            reviews = item.get('reviews', '')
-            
-            # Detectar tipo de repuesto basado en el título
-            part_type = 'Aftermarket'
-            title_lower = title.lower()
-            if any(oem_word in title_lower for oem_word in ['oem', 'original', 'genuine', 'factory', 'oem part']):
-                part_type = 'OEM'
-            elif any(premium_word in title_lower for premium_word in ['premium', 'performance', 'heavy duty']):
-                part_type = 'Premium'
-            
-            return {
-                'title': title,
-                'price': price_display,
-                'price_numeric': price_numeric,
-                'source': source,
-                'link': link,
-                'rating': rating,
-                'reviews': reviews,
-                'part_type': part_type,
-                'search_source': 'serpapi_real',
-                'verified': True,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Error procesando resultado SerpAPI: {e}")
-            return None
-
-    def _build_search_query(self, query, vehicle_info):
-        """Construir query de búsqueda optimizada"""
-        try:
-            parts = []
-            
-            # Agregar información del vehículo si existe
-            if vehicle_info:
-                if vehicle_info.get('year'):
-                    parts.append(str(vehicle_info['year']))
-                if vehicle_info.get('make'):
-                    parts.append(vehicle_info['make'].lower())
-                if vehicle_info.get('model'):
-                    parts.append(vehicle_info['model'].lower())
-            
-            # Agregar query del usuario
-            if query and query.strip():
-                parts.append(query.strip())
-            
-            # Si no hay nada, devolver None
-            if not parts:
-                return None
-            
-            final_query = ' '.join(parts).strip()
-            
-            print(f"🔍 DEBUG: Query construida = '{final_query}'")
-            logger.info(f"🔍 Query construida: '{final_query}'")
-            return final_query
-            
-        except Exception as e:
-            logger.error(f"❌ Error construyendo query: {e}")
-            return None
-
-# ==============================================================================
-# FUNCIONES AUXILIARES
-# ==============================================================================
-
-def login_required(f):
-    """Decorador para requerir login"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        try:
-            if not firebase_auth or not firebase_auth.is_user_logged_in():
-                flash('Debes iniciar sesión para acceder a esta página.', 'warning')
-                return redirect(url_for('auth_login_page'))
-            return f(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"Error en login_required: {e}")
-            return redirect(url_for('auth_login_page'))
-    return decorated_function
-
-def validate_image(image_content):
-    """Validar imagen subida"""
-    if not PIL_AVAILABLE or not image_content:
-        return False
-    try:
-        image = Image.open(io.BytesIO(image_content))
-        return image.size[0] > 10 and image.size[1] > 10
-    except Exception as e:
-        logger.error(f"Error validando imagen: {e}")
-        return False
-
-def render_page(title, content):
-    """Renderizar página con template base"""
-    template = f'''<!DOCTYPE html>
-<html lang="es">
-<head>
-    <title>{html.escape(title)}</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; 
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); 
-            min-height: 100vh; 
-            padding: 15px; 
-        }}
-        .container {{ 
-            max-width: 800px; 
-            margin: 0 auto; 
-            background: white; 
-            padding: 30px; 
-            border-radius: 12px; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2); 
-        }}
-        h1 {{ color: #1e3c72; text-align: center; margin-bottom: 10px; font-size: 2.2em; }}
-        .subtitle {{ text-align: center; color: #666; margin-bottom: 30px; font-size: 1.1em; }}
-        input, select {{ 
-            width: 100%; 
-            padding: 14px; 
-            margin: 10px 0; 
-            border: 2px solid #e1e5e9; 
-            border-radius: 8px; 
-            font-size: 16px; 
-            transition: border-color 0.3s;
-        }}
-        input:focus, select:focus {{ outline: none; border-color: #1e3c72; }}
-        button {{ 
-            background: #1e3c72; 
-            color: white; 
-            border: none; 
-            border-radius: 8px; 
-            cursor: pointer; 
-            font-size: 16px; 
-            font-weight: 600; 
-            padding: 14px 24px; 
-            transition: background-color 0.3s;
-        }}
-        button:hover {{ background: #2a5298; }}
-        button:disabled {{ background: #ccc; cursor: not-allowed; }}
-        .search-bar {{ display: flex; gap: 12px; margin-bottom: 25px; }}
-        .search-bar input {{ flex: 1; margin: 0; }}
-        .search-bar button {{ margin: 0; }}
-        .vehicle-form {{ 
-            background: #f8f9fa; 
-            padding: 25px; 
-            border-radius: 10px; 
-            margin: 20px 0; 
-            border: 1px solid #dee2e6;
-        }}
-        .vehicle-row {{ 
-            display: grid; 
-            grid-template-columns: 1fr 1fr 1fr; 
-            gap: 15px; 
-            margin-bottom: 15px; 
-        }}
-        .tips {{ 
-            background: #e8f4f8; 
-            border-left: 4px solid #1e3c72; 
-            padding: 20px; 
-            border-radius: 6px; 
-            margin-bottom: 20px; 
-            font-size: 14px; 
-        }}
-        .error {{ 
-            background: #ffebee; 
-            color: #c62828; 
-            padding: 15px; 
-            border-radius: 8px; 
-            margin: 15px 0; 
-            display: none; 
-            border-left: 4px solid #d32f2f;
-        }}
-        .success {{ 
-            background: #e8f5e8; 
-            color: #2e7d32; 
-            padding: 15px; 
-            border-radius: 8px; 
-            margin: 15px 0; 
-            border-left: 4px solid #4caf50;
-        }}
-        .loading {{ 
-            text-align: center; 
-            padding: 40px; 
-            display: none; 
-        }}
-        .spinner {{ 
-            border: 4px solid #f3f3f3; 
-            border-top: 4px solid #1e3c72; 
-            border-radius: 50%; 
-            width: 50px; 
-            height: 50px; 
-            animation: spin 1s linear infinite; 
-            margin: 0 auto 20px; 
-        }}
-        @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
-        .user-info {{ 
-            background: #e3f2fd; 
-            padding: 15px; 
-            border-radius: 8px; 
-            margin-bottom: 20px; 
-            text-align: center; 
-            font-weight: 500;
-        }}
-        .user-info a {{ color: #1976d2; text-decoration: none; font-weight: 600; }}
-        .user-info a:hover {{ text-decoration: underline; }}
-        .image-upload {{ 
-            background: #f8f9fa; 
-            border: 3px dashed #dee2e6; 
-            border-radius: 10px; 
-            padding: 30px; 
-            text-align: center; 
-            margin: 20px 0; 
-            cursor: pointer; 
-            transition: all 0.3s ease;
-        }}
-        .image-upload:hover {{ border-color: #1e3c72; background: #e3f2fd; }}
-        .image-upload input[type="file"] {{ display: none; }}
-        .or-divider {{ 
-            text-align: center; 
-            margin: 25px 0; 
-            color: #666; 
-            font-weight: 600; 
-            position: relative; 
-        }}
-        .or-divider:before {{ 
-            content: ''; 
-            position: absolute; 
-            top: 50%; 
-            left: 0; 
-            right: 0; 
-            height: 1px; 
-            background: #dee2e6; 
-            z-index: 1; 
-        }}
-        .or-divider span {{ 
-            background: white; 
-            padding: 0 20px; 
-            position: relative; 
-            z-index: 2; 
-        }}
-        .part-badge {{ 
+.part-badge {{ 
             display: inline-block; 
             color: white; 
             padding: 4px 10px; 
@@ -726,6 +115,7 @@ def home():
                 💡 <strong>Consejos para mejores resultados:</strong><br>
                 • Incluye año, marca y modelo de tu vehículo<br>
                 • Usa nombres específicos como "brake pads", "oil filter", "spark plugs"<br>
+                • Sé específico: "honda civic brake pads 2018" es mejor que solo "brake pads"<br>
                 • Puedes subir una foto del repuesto para identificación visual
             </div>
             
@@ -842,7 +232,7 @@ def home():
             }}
         }}
         
-        // Búsqueda de repuestos - FUNCIÓN PRINCIPAL
+        // Búsqueda de repuestos - FUNCIÓN PRINCIPAL CORREGIDA
         async function searchParts() {{
             console.log('🔍 Iniciando búsqueda...');
             
@@ -890,6 +280,10 @@ def home():
                 
                 console.log('📥 Respuesta recibida:', response.status, response.statusText);
                 
+                if (!response.ok) {{
+                    throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
+                }}
+                
                 const result = await response.json();
                 console.log('📊 Datos recibidos:', result);
                 
@@ -898,7 +292,7 @@ def home():
                         console.log('✅ Búsqueda exitosa, mostrando resultados...');
                         displayResults(result.products, result.search_info || {{}});
                     }} else {{
-                        showError('No se encontraron repuestos para esta búsqueda. Intenta con términos más generales.');
+                        showError(result.message || 'No se encontraron repuestos para esta búsqueda. Intenta con términos más específicos.');
                     }}
                 }} else {{
                     console.error('❌ Error en búsqueda:', result.message);
@@ -906,7 +300,7 @@ def home():
                 }}
             }} catch (error) {{
                 console.error('❌ Error de conexión:', error);
-                showError('Error de conexión. Verifica tu internet e intenta nuevamente.');
+                showError(`Error de conexión: ${{error.message}}. Verifica tu internet e intenta nuevamente.`);
             }} finally {{
                 showLoading(false);
             }}
@@ -958,8 +352,8 @@ def home():
                         </h4>
                         <div class="product-price">${{product.price}}</div>
                         <div class="product-store"><strong>Tienda:</strong> ${{product.source}}</div>
-                        ${{product.rating ? `<div style="font-size: 13px; color: #666; margin: 8px 0;">⭐ ${{product.rating}} (${{product.reviews}} reseñas)</div>` : ''}}
-                        <a href="${{product.link}}" target="_blank" class="product-link">
+                        ${{product.rating ? `<div style="font-size: 13px; color: #666; margin: 8px 0;">⭐ ${{product.rating}} (${{product.reviews || '0'}} reseñas)</div>` : ''}}
+                        <a href="${{product.link}}" target="_blank" class="product-link" rel="noopener noreferrer">
                             Ver en Tienda →
                         </a>
                     </div>
@@ -973,11 +367,12 @@ def home():
                 <div style="background: #f8f9fa; padding: 20px; border-radius: 10px; margin-top: 30px; text-align: center;">
                     <h4 style="color: #1e3c72; margin-bottom: 15px;">💡 Consejos para comprar repuestos</h4>
                     <ul style="text-align: left; color: #666; max-width: 600px; margin: 0 auto;">
-                        <li style="margin-bottom: 8px;">✅ Verifica la compatibilidad con tu vehículo antes de comprar</li>
+                        <li style="margin-bottom: 8px;">✅ Verifica SIEMPRE la compatibilidad con tu vehículo antes de comprar</li>
                         <li style="margin-bottom: 8px;">💰 Compara precios entre diferentes tiendas</li>
                         <li style="margin-bottom: 8px;">⭐ Lee las reseñas de otros compradores</li>
                         <li style="margin-bottom: 8px;">🛡️ Considera la garantía ofrecida por cada tienda</li>
                         <li style="margin-bottom: 8px;">🔗 Los enlaces te llevan directamente a la página del producto</li>
+                        <li style="margin-bottom: 8px;">📞 Confirma disponibilidad antes de ir a recoger</li>
                     </ul>
                 </div>
             `;
@@ -1242,20 +637,24 @@ def search_page():
                     body: formData
                 }});
                 
+                if (!response.ok) {{
+                    throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
+                }}
+                
                 const result = await response.json();
                 
                 if (result.success) {{
                     if (result.products && result.products.length > 0) {{
                         displayResults(result.products);
                     }} else {{
-                        showError('No se encontraron repuestos para esta búsqueda');
+                        showError(result.message || 'No se encontraron repuestos para esta búsqueda');
                     }}
                 }} else {{
                     showError(result.message || 'Error en la búsqueda');
                 }}
             }} catch (error) {{
                 console.error('Error:', error);
-                showError('Error de conexión');
+                showError(`Error de conexión: ${{error.message}}`);
             }} finally {{
                 showLoading(false);
             }}
@@ -1299,8 +698,8 @@ def search_page():
                         </h4>
                         <div class="product-price">${{product.price}}</div>
                         <div class="product-store"><strong>Tienda:</strong> ${{product.source}}</div>
-                        ${{product.rating ? `<div style="font-size: 13px; color: #666; margin: 8px 0;">⭐ ${{product.rating}} (${{product.reviews}} reseñas)</div>` : ''}}
-                        <a href="${{product.link}}" target="_blank" class="product-link">
+                        ${{product.rating ? `<div style="font-size: 13px; color: #666; margin: 8px 0;">⭐ ${{product.rating}} (${{product.reviews || '0'}} reseñas)</div>` : ''}}
+                        <a href="${{product.link}}" target="_blank" class="product-link" rel="noopener noreferrer">
                             Ver Producto →
                         </a>
                     </div>
@@ -1385,7 +784,7 @@ def api_login():
 
 @app.route('/api/search-parts-public', methods=['POST'])
 def api_search_parts_public():
-    """API de búsqueda pública profesional"""
+    """API de búsqueda pública profesional - CORREGIDA"""
     try:
         # Verificar que SerpAPI esté configurada
         if not auto_parts_finder:
@@ -1442,7 +841,7 @@ def api_search_parts_public():
             }
             print(f"🚗 DEBUG: Info del vehículo: {vehicle_info}")
         
-        # Realizar búsqueda profesional
+        # Realizar búsqueda profesional con manejo de errores mejorado
         print(f"🔍 DEBUG: Iniciando búsqueda profesional...")
         logger.info(f"🔍 Iniciando búsqueda profesional...")
         
@@ -1452,11 +851,18 @@ def api_search_parts_public():
             vehicle_info=vehicle_info
         )
         
-        print(f"📊 DEBUG: Resultado de búsqueda: {search_result.get('success', False)}")
-        logger.info(f"📊 Resultado de búsqueda: {search_result.get('success', False)}")
+        print(f"📊 DEBUG: Resultado de búsqueda: {search_result}")
+        logger.info(f"📊 Resultado de búsqueda recibido")
         
+        # Verificar resultado de la búsqueda
         if not search_result.get('success', False):
-            return jsonify(search_result)
+            error_message = search_result.get('message', 'Error desconocido en la búsqueda')
+            print(f"❌ DEBUG: Error en búsqueda: {error_message}")
+            return jsonify({
+                'success': False,
+                'message': error_message,
+                'products': []
+            })
         
         products = search_result.get('products', [])
         
@@ -1483,7 +889,7 @@ def api_search_parts_public():
             'products': products,
             'search_info': search_info,
             'count': len(products),
-            'message': search_result.get('message', '')
+            'message': search_result.get('message', f'Se encontraron {len(products)} productos')
         })
         
     except Exception as e:
@@ -1491,13 +897,13 @@ def api_search_parts_public():
         print(f"❌ DEBUG: Error en búsqueda pública: {e}")
         return jsonify({
             'success': False, 
-            'message': f'Error interno del servidor: {str(e)}'
+            'message': f'Error interno del servidor. Intenta nuevamente.'
         })
 
 @app.route('/api/search-parts', methods=['POST'])
 @login_required
 def api_search_parts():
-    """API de búsqueda para usuarios autenticados"""
+    """API de búsqueda para usuarios autenticados - CORREGIDA"""
     try:
         query = request.form.get('query', '').strip()
         
@@ -1518,18 +924,23 @@ def api_search_parts():
         
         search_result = auto_parts_finder.search_auto_parts(query=query)
         
-        print(f"✅ DEBUG: Búsqueda premium completada")
+        print(f"📊 DEBUG: Búsqueda premium completada: {search_result.get('success', False)}")
         
         if search_result.get('success', False):
+            products = search_result.get('products', [])
             return jsonify({
                 'success': True,
-                'products': search_result.get('products', []),
-                'count': len(search_result.get('products', [])),
+                'products': products,
+                'count': len(products),
                 'premium': True,
-                'message': search_result.get('message', '')
+                'message': search_result.get('message', f'Se encontraron {len(products)} productos')
             })
         else:
-            return jsonify(search_result)
+            return jsonify({
+                'success': False,
+                'message': search_result.get('message', 'Error en la búsqueda'),
+                'products': []
+            })
         
     except Exception as e:
         logger.error(f"Error en búsqueda autenticada: {e}")
@@ -1641,7 +1052,7 @@ initialize_components()
 
 if __name__ == '__main__':
     print("=" * 70)
-    print("🔧 AUTO PARTS FINDER USA - VERSIÓN PROFESIONAL")
+    print("🔧 AUTO PARTS FINDER USA - BÚSQUEDA CORREGIDA")
     print("=" * 70)
     
     # Información del sistema
@@ -1662,6 +1073,7 @@ if __name__ == '__main__':
         print(f"🔑 SerpAPI: ✅ CONFIGURADO CORRECTAMENTE")
         print(f"   Key: {serpapi_key[:4]}...{serpapi_key[-4:]} (longitud: {len(serpapi_key)})")
         print("   ➡️ La aplicación funcionará correctamente")
+        print("   🔧 Usando engine=google con tbm=shop (CORREGIDO)")
     else:
         print("🔑 SerpAPI: ❌ NO CONFIGURADO")
         print("   ➡️ LA APLICACIÓN NO FUNCIONARÁ")
@@ -1673,6 +1085,7 @@ if __name__ == '__main__':
     print("   Admin: admin@autoparts.com / AutoParts2025!")
     print("   User: user@autoparts.com / UserPass123!")
     print("🔗 Página principal: http://localhost:5000")
+    print("🔧 BÚSQUEDA CORREGIDA: Ahora debería funcionar con SerpAPI")
     print("=" * 70)
     
     # Verificar estado crítico
@@ -1697,5 +1110,708 @@ if __name__ == '__main__':
         print("   - Puerto disponible")
         print("   - Permisos de red")
         print("   - Variables de entorno")
-        print("   - SERPAPI_KEY configurada")
-        print("   - Dependencias instaladas")
+        print("   - SERPAPI_KEY configurada correctamente")
+        print("   - Dependencias instaladas")# webapp.py - Auto Parts Finder USA - BÚSQUEDA CORREGIDA
+from flask import Flask, request, jsonify, session, redirect, url_for, render_template_string, flash
+import requests
+import os
+import re
+import html
+import time
+import io
+import random
+import logging
+from datetime import datetime, timedelta
+from urllib.parse import urlparse, quote_plus, urljoin
+from functools import wraps
+import json
+
+# Imports opcionales con manejo de errores
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+    print("✅ PIL (Pillow) disponible")
+except ImportError:
+    PIL_AVAILABLE = False
+    print("⚠ PIL no disponible")
+
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+    print("✅ Gemini disponible")
+except ImportError:
+    genai = None
+    GEMINI_AVAILABLE = False
+    print("⚠ Gemini no disponible")
+
+try:
+    from bs4 import BeautifulSoup
+    BS4_AVAILABLE = True
+    print("✅ BeautifulSoup4 disponible")
+except ImportError:
+    BS4_AVAILABLE = False
+    print("⚠ BeautifulSoup4 no disponible")
+
+# Configuración de logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Función para debug de variables de entorno
+def debug_environment():
+    """Debug completo de variables de entorno"""
+    print("=" * 50)
+    print("🔍 DEBUG: ANÁLISIS DE VARIABLES DE ENTORNO")
+    print("=" * 50)
+    
+    # Verificar SERPAPI_KEY específicamente
+    serpapi_key = os.environ.get('SERPAPI_KEY')
+    if serpapi_key:
+        print(f"✅ SERPAPI_KEY encontrada: {serpapi_key[:4]}...{serpapi_key[-4:]}")
+        print(f"✅ Longitud de la key: {len(serpapi_key)} caracteres")
+        print(f"✅ Tipo: {type(serpapi_key)}")
+        print(f"✅ Válida (no vacía): {bool(serpapi_key.strip())}")
+    else:
+        print("❌ SERPAPI_KEY no encontrada")
+        print("❌ LA APLICACIÓN REQUIERE SERPAPI_KEY PARA FUNCIONAR")
+    
+    print("=" * 50)
+
+# Llamar debug al inicio
+debug_environment()
+
+# Inicializar Flask app
+app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'auto-parts-finder-secret-key-2025')
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SECURE'] = True if os.environ.get('RENDER') else False
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
+
+# Base de datos de vehículos populares en USA
+VEHICLE_DATABASE = {
+    'makes': {
+        'chevrolet': ['silverado', 'equinox', 'malibu', 'tahoe', 'suburban', 'traverse', 'camaro', 'corvette'],
+        'ford': ['f150', 'f250', 'f350', 'escape', 'explorer', 'mustang', 'edge', 'expedition'],
+        'toyota': ['camry', 'corolla', 'rav4', 'highlander', 'prius', 'tacoma', 'tundra', 'sienna'],
+        'honda': ['civic', 'accord', 'crv', 'pilot', 'odyssey', 'ridgeline', 'passport'],
+        'nissan': ['altima', 'sentra', 'rogue', 'murano', 'pathfinder', 'titan', 'frontier'],
+        'jeep': ['wrangler', 'grand cherokee', 'cherokee', 'compass', 'renegade', 'gladiator'],
+        'ram': ['1500', '2500', '3500', 'promaster'],
+        'gmc': ['sierra', 'terrain', 'acadia', 'yukon', 'canyon']
+    },
+    'years': list(range(1990, 2025)),
+    'common_parts': [
+        'brake pads', 'brake rotors', 'oil filter', 'air filter', 'spark plugs', 
+        'battery', 'alternator', 'starter', 'radiator', 'water pump'
+    ]
+}
+
+# Variables globales para componentes
+firebase_auth = None
+auto_parts_finder = None
+
+# ==============================================================================
+# CLASES PRINCIPALES
+# ==============================================================================
+
+class FirebaseAuth:
+    """Sistema de autenticación real"""
+    
+    def __init__(self):
+        self.firebase_web_api_key = os.environ.get("FIREBASE_WEB_API_KEY")
+        self.test_users = {
+            "admin@autoparts.com": {
+                "password": "AutoParts2025!",
+                "name": "Admin User",
+                "role": "admin"
+            },
+            "user@autoparts.com": {
+                "password": "UserPass123!",
+                "name": "Regular User", 
+                "role": "user"
+            }
+        }
+        logger.info(f"Firebase Auth configurado: {bool(self.firebase_web_api_key)}")
+    
+    def login_user(self, email, password):
+        """Login con usuarios reales configurados"""
+        try:
+            if email in self.test_users and self.test_users[email]["password"] == password:
+                user_data = self.test_users[email]
+                return {
+                    'success': True,
+                    'message': 'Autenticación exitosa',
+                    'user_data': {
+                        'user_id': f'user_{hash(email)}',
+                        'email': email,
+                        'display_name': user_data['name'],
+                        'role': user_data['role'],
+                        'id_token': f'token_{hash(email + str(time.time()))}'
+                    }
+                }
+            else:
+                return {
+                    'success': False,
+                    'message': 'Credenciales incorrectas',
+                    'user_data': None
+                }
+        except Exception as e:
+            logger.error(f"Error en login: {e}")
+            return {
+                'success': False,
+                'message': 'Error interno en autenticación',
+                'user_data': None
+            }
+    
+    def set_user_session(self, user_data):
+        """Establecer sesión de usuario"""
+        try:
+            session['user_id'] = user_data['user_id']
+            session['user_name'] = user_data['display_name']
+            session['user_email'] = user_data['email']
+            session['user_role'] = user_data.get('role', 'user')
+            session['login_time'] = datetime.now().isoformat()
+            session.permanent = True
+        except Exception as e:
+            logger.error(f"Error estableciendo sesión: {e}")
+    
+    def clear_user_session(self):
+        """Limpiar sesión de usuario"""
+        try:
+            session.clear()
+        except Exception as e:
+            logger.error(f"Error limpiando sesión: {e}")
+    
+    def is_user_logged_in(self):
+        """Verificar si el usuario está logueado"""
+        try:
+            return 'user_id' in session and session.get('user_id') is not None
+        except Exception as e:
+            logger.error(f"Error verificando login: {e}")
+            return False
+    
+    def get_current_user(self):
+        """Obtener usuario actual"""
+        try:
+            if not self.is_user_logged_in():
+                return None
+            return {
+                'user_id': session.get('user_id'),
+                'user_name': session.get('user_name'),
+                'user_email': session.get('user_email'),
+                'user_role': session.get('user_role', 'user')
+            }
+        except Exception as e:
+            logger.error(f"Error obteniendo usuario: {e}")
+            return None
+
+class AutoPartsFinder:
+    """Buscador profesional de repuestos automotrices con SerpAPI CORREGIDO"""
+    
+    def __init__(self):
+        print("\n🔧 INICIALIZANDO AutoPartsFinder...")
+        
+        # API key es REQUERIDA para funcionar
+        self.api_key = os.environ.get('SERPAPI_KEY', '').strip()
+        
+        if not self.api_key:
+            logger.error("❌ SERPAPI_KEY es requerida para el funcionamiento de la aplicación")
+            print("❌ SERPAPI_KEY es REQUERIDA. La aplicación no funcionará sin ella.")
+            raise ValueError("SERPAPI_KEY es requerida para el funcionamiento de la aplicación")
+        
+        print(f"✅ SerpAPI configurado correctamente")
+        print(f"✅ Key: {self.api_key[:4]}...{self.api_key[-4:]} (longitud: {len(self.api_key)})")
+        
+        self.base_url = "https://serpapi.com/search"
+        logger.info(f"✅ SerpAPI inicializado correctamente")
+        
+        print(f"🔑 AutoPartsFinder inicializado - MODO PROFESIONAL\n")
+    
+    def search_auto_parts(self, query=None, image_content=None, vehicle_info=None):
+        """Búsqueda profesional CORREGIDA de repuestos usando SerpAPI"""
+        try:
+            # Construir query final
+            final_query = self._build_search_query(query, vehicle_info)
+            
+            if not final_query:
+                return {
+                    'success': False,
+                    'message': 'Término de búsqueda requerido',
+                    'products': []
+                }
+            
+            logger.info(f"🔍 Buscando: '{final_query}'")
+            print(f"🔍 DEBUG: Query final = '{final_query}'")
+            
+            # Hacer llamada real a SerpAPI
+            print("🚀 DEBUG: Llamando a SerpAPI...")
+            return self._search_with_serpapi(final_query)
+            
+        except Exception as e:
+            logger.error(f"❌ Error en búsqueda: {e}")
+            print(f"❌ DEBUG: Error en search_auto_parts = {e}")
+            return {
+                'success': False,
+                'message': f'Error en la búsqueda: {str(e)}',
+                'products': []
+            }
+    
+    def _search_with_serpapi(self, query):
+        """Realizar búsqueda real usando SerpAPI - VERSIÓN CORREGIDA"""
+        try:
+            # Parámetros corregidos según documentación oficial de SerpAPI
+            params = {
+                'api_key': self.api_key,
+                'engine': 'google',  # Cambio: usar engine=google en lugar de google_shopping
+                'q': f"{query} auto parts automotive",  # Query mejorada
+                'tbm': 'shop',  # Específicamente para shopping
+                'location': 'United States',
+                'hl': 'en',
+                'gl': 'us',
+                'num': 20,
+                'no_cache': 'false'  # Permitir cache para mejor rendimiento
+            }
+            
+            logger.info(f"🔍 Llamando a SerpAPI con query: {params['q']}")
+            print(f"🌐 DEBUG: Haciendo petición REAL a SerpAPI...")
+            print(f"🔑 DEBUG: Parámetros: engine={params['engine']}, tbm={params['tbm']}")
+            
+            # Hacer petición HTTP con timeout y headers
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            
+            response = requests.get(self.base_url, params=params, headers=headers, timeout=30)
+            print(f"📊 DEBUG: Status HTTP: {response.status_code}")
+            
+            if response.status_code != 200:
+                logger.error(f"❌ Error HTTP {response.status_code}")
+                # Intentar obtener mensaje de error
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('error', f'HTTP {response.status_code}')
+                except:
+                    error_msg = f'HTTP {response.status_code}'
+                
+                return {
+                    'success': False,
+                    'message': f'Error del servicio de búsqueda: {error_msg}',
+                    'products': []
+                }
+            
+            data = response.json()
+            print(f"📊 DEBUG: Respuesta de SerpAPI recibida")
+            
+            # Debug: mostrar estructura de la respuesta
+            print(f"🔍 DEBUG: Claves en respuesta: {list(data.keys())}")
+            
+            # Verificar si hay error en la respuesta
+            if 'error' in data:
+                logger.error(f"❌ Error de SerpAPI: {data['error']}")
+                return {
+                    'success': False,
+                    'message': f"Error de SerpAPI: {data['error']}",
+                    'products': []
+                }
+            
+            # Buscar resultados de shopping en diferentes ubicaciones posibles
+            shopping_results = []
+            
+            # Intentar obtener shopping_results
+            if 'shopping_results' in data:
+                shopping_results = data['shopping_results']
+                print(f"📊 DEBUG: Encontrados shopping_results: {len(shopping_results)}")
+            
+            # Si no hay shopping_results, intentar con organic_results que contengan shopping
+            if not shopping_results and 'organic_results' in data:
+                organic_results = data['organic_results']
+                print(f"📊 DEBUG: Revisando organic_results: {len(organic_results)}")
+                
+                # Filtrar resultados que parezcan de shopping
+                for result in organic_results:
+                    if any(shop_indicator in result.get('link', '').lower() for shop_indicator in 
+                           ['shop', 'store', 'buy', 'price', 'product']):
+                        shopping_results.append({
+                            'title': result.get('title', ''),
+                            'link': result.get('link', ''),
+                            'source': result.get('displayed_link', '').split('/')[0] if result.get('displayed_link') else 'Unknown',
+                            'price': 'Ver precio',
+                            'snippet': result.get('snippet', '')
+                        })
+            
+            print(f"📊 DEBUG: Total resultados procesables: {len(shopping_results)}")
+            
+            if not shopping_results:
+                logger.warning("⚠️ No se encontraron resultados de shopping en SerpAPI")
+                return {
+                    'success': True,
+                    'message': 'No se encontraron productos para esta búsqueda. Intenta con términos más específicos.',
+                    'products': []
+                }
+            
+            # Convertir a formato interno
+            processed_results = []
+            for item in shopping_results[:15]:  # Limitar a 15 resultados
+                processed_item = self._process_serpapi_result(item)
+                if processed_item:
+                    processed_results.append(processed_item)
+            
+            print(f"✅ DEBUG: {len(processed_results)} resultados REALES procesados")
+            logger.info(f"✅ Procesados {len(processed_results)} resultados REALES de SerpAPI")
+            
+            return {
+                'success': True,
+                'message': f'Se encontraron {len(processed_results)} productos',
+                'products': processed_results
+            }
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Error de conexión con SerpAPI: {e}")
+            return {
+                'success': False,
+                'message': 'Error de conexión con el servicio de búsqueda. Verifica tu conexión a internet.',
+                'products': []
+            }
+        except requests.exceptions.Timeout:
+            logger.error("❌ Timeout en SerpAPI")
+            return {
+                'success': False,
+                'message': 'Timeout en el servicio de búsqueda. El servicio está tardando demasiado.',
+                'products': []
+            }
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Error parseando JSON: {e}")
+            return {
+                'success': False,
+                'message': 'Error procesando respuesta del servicio de búsqueda.',
+                'products': []
+            }
+        except Exception as e:
+            logger.error(f"❌ Error inesperado en SerpAPI: {e}")
+            return {
+                'success': False,
+                'message': f'Error inesperado: {str(e)}',
+                'products': []
+            }
+
+    def _process_serpapi_result(self, item):
+        """Procesar un resultado individual de SerpAPI - VERSIÓN MEJORADA"""
+        try:
+            # Extraer datos de manera más flexible
+            title = item.get('title', '').strip()
+            
+            # Múltiples formas de obtener el link
+            link = item.get('link', '') or item.get('product_link', '') or item.get('url', '')
+            
+            # Múltiples formas de obtener la fuente/tienda
+            source = (item.get('source', '') or 
+                     item.get('store', '') or 
+                     item.get('merchant', '') or
+                     'Tienda Online')
+            
+            # Múltiples formas de obtener el precio
+            price = (item.get('price', '') or 
+                    item.get('extracted_price', '') or
+                    item.get('typical_price', '') or
+                    'Consultar precio')
+            
+            # Validaciones básicas
+            if not title:
+                print(f"⚠️ DEBUG: Producto sin título, saltando...")
+                return None
+                
+            if not link:
+                print(f"⚠️ DEBUG: Producto sin link: {title}, saltando...")
+                return None
+            
+            # Validar que sea un link real
+            if not link.startswith(('http://', 'https://')):
+                print(f"⚠️ DEBUG: Link inválido para {title}: {link}")
+                return None
+            
+            # Procesar precio de manera más robusta
+            price_numeric = 0.0
+            price_display = 'Consultar precio'
+            
+            if price and str(price).strip():
+                try:
+                    # Si el precio es un número (extracted_price)
+                    if isinstance(price, (int, float)):
+                        price_numeric = float(price)
+                        price_display = f"${price_numeric:.2f}"
+                    else:
+                        # Extraer número del precio string
+                        price_str = str(price)
+                        price_clean = re.sub(r'[^\d\.]', '', price_str)
+                        if price_clean and '.' in price_clean:
+                            # Asegurar solo un punto decimal
+                            parts = price_clean.split('.')
+                            if len(parts) == 2:
+                                price_clean = f"{parts[0]}.{parts[1][:2]}"  # Solo 2 decimales
+                                price_numeric = float(price_clean)
+                                price_display = f"${price_numeric:.2f}"
+                        elif price_clean:
+                            price_numeric = float(price_clean)
+                            price_display = f"${price_numeric:.2f}"
+                        else:
+                            price_display = price_str
+                except Exception as e:
+                    print(f"⚠️ DEBUG: Error procesando precio '{price}': {e}")
+                    price_display = str(price) if price else 'Consultar precio'
+            
+            # Extraer información adicional de manera segura
+            rating = item.get('rating', '') or item.get('product_rating', '')
+            reviews = item.get('reviews', '') or item.get('product_reviews', '')
+            
+            # Detectar tipo de repuesto basado en el título de forma más inteligente
+            part_type = 'Aftermarket'
+            title_lower = title.lower()
+            
+            # Palabras clave para OEM
+            oem_keywords = ['oem', 'original', 'genuine', 'factory', 'oem part', 'original equipment']
+            # Palabras clave para Premium
+            premium_keywords = ['premium', 'performance', 'heavy duty', 'professional', 'commercial grade']
+            
+            if any(keyword in title_lower for keyword in oem_keywords):
+                part_type = 'OEM'
+            elif any(keyword in title_lower for keyword in premium_keywords):
+                part_type = 'Premium'
+            
+            return {
+                'title': title,
+                'price': price_display,
+                'price_numeric': price_numeric,
+                'source': source,
+                'link': link,
+                'rating': rating,
+                'reviews': reviews,
+                'part_type': part_type,
+                'search_source': 'serpapi_real',
+                'verified': True,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error procesando resultado SerpAPI: {e}")
+            print(f"❌ DEBUG: Error procesando item: {e}")
+            print(f"📊 DEBUG: Item problemático: {item}")
+            return None
+
+    def _build_search_query(self, query, vehicle_info):
+        """Construir query de búsqueda optimizada"""
+        try:
+            parts = []
+            
+            # Agregar información del vehículo si existe
+            if vehicle_info:
+                if vehicle_info.get('year'):
+                    parts.append(str(vehicle_info['year']))
+                if vehicle_info.get('make'):
+                    parts.append(vehicle_info['make'].lower())
+                if vehicle_info.get('model'):
+                    parts.append(vehicle_info['model'].lower())
+            
+            # Agregar query del usuario
+            if query and query.strip():
+                parts.append(query.strip())
+            
+            # Si no hay nada, devolver None
+            if not parts:
+                return None
+            
+            final_query = ' '.join(parts).strip()
+            
+            print(f"🔍 DEBUG: Query construida = '{final_query}'")
+            logger.info(f"🔍 Query construida: '{final_query}'")
+            return final_query
+            
+        except Exception as e:
+            logger.error(f"❌ Error construyendo query: {e}")
+            return None
+
+# ==============================================================================
+# FUNCIONES AUXILIARES
+# ==============================================================================
+
+def login_required(f):
+    """Decorador para requerir login"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        try:
+            if not firebase_auth or not firebase_auth.is_user_logged_in():
+                flash('Debes iniciar sesión para acceder a esta página.', 'warning')
+                return redirect(url_for('auth_login_page'))
+            return f(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"Error en login_required: {e}")
+            return redirect(url_for('auth_login_page'))
+    return decorated_function
+
+def validate_image(image_content):
+    """Validar imagen subida"""
+    if not PIL_AVAILABLE or not image_content:
+        return False
+    try:
+        image = Image.open(io.BytesIO(image_content))
+        return image.size[0] > 10 and image.size[1] > 10
+    except Exception as e:
+        logger.error(f"Error validando imagen: {e}")
+        return False
+
+def render_page(title, content):
+    """Renderizar página con template base"""
+    template = f'''<!DOCTYPE html>
+<html lang="es">
+<head>
+    <title>{html.escape(title)}</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; 
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); 
+            min-height: 100vh; 
+            padding: 15px; 
+        }}
+        .container {{ 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background: white; 
+            padding: 30px; 
+            border-radius: 12px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2); 
+        }}
+        h1 {{ color: #1e3c72; text-align: center; margin-bottom: 10px; font-size: 2.2em; }}
+        .subtitle {{ text-align: center; color: #666; margin-bottom: 30px; font-size: 1.1em; }}
+        input, select {{ 
+            width: 100%; 
+            padding: 14px; 
+            margin: 10px 0; 
+            border: 2px solid #e1e5e9; 
+            border-radius: 8px; 
+            font-size: 16px; 
+            transition: border-color 0.3s;
+        }}
+        input:focus, select:focus {{ outline: none; border-color: #1e3c72; }}
+        button {{ 
+            background: #1e3c72; 
+            color: white; 
+            border: none; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            font-size: 16px; 
+            font-weight: 600; 
+            padding: 14px 24px; 
+            transition: background-color 0.3s;
+        }}
+        button:hover {{ background: #2a5298; }}
+        button:disabled {{ background: #ccc; cursor: not-allowed; }}
+        .search-bar {{ display: flex; gap: 12px; margin-bottom: 25px; }}
+        .search-bar input {{ flex: 1; margin: 0; }}
+        .search-bar button {{ margin: 0; }}
+        .vehicle-form {{ 
+            background: #f8f9fa; 
+            padding: 25px; 
+            border-radius: 10px; 
+            margin: 20px 0; 
+            border: 1px solid #dee2e6;
+        }}
+        .vehicle-row {{ 
+            display: grid; 
+            grid-template-columns: 1fr 1fr 1fr; 
+            gap: 15px; 
+            margin-bottom: 15px; 
+        }}
+        .tips {{ 
+            background: #e8f4f8; 
+            border-left: 4px solid #1e3c72; 
+            padding: 20px; 
+            border-radius: 6px; 
+            margin-bottom: 20px; 
+            font-size: 14px; 
+        }}
+        .error {{ 
+            background: #ffebee; 
+            color: #c62828; 
+            padding: 15px; 
+            border-radius: 8px; 
+            margin: 15px 0; 
+            display: none; 
+            border-left: 4px solid #d32f2f;
+        }}
+        .success {{ 
+            background: #e8f5e8; 
+            color: #2e7d32; 
+            padding: 15px; 
+            border-radius: 8px; 
+            margin: 15px 0; 
+            border-left: 4px solid #4caf50;
+        }}
+        .loading {{ 
+            text-align: center; 
+            padding: 40px; 
+            display: none; 
+        }}
+        .spinner {{ 
+            border: 4px solid #f3f3f3; 
+            border-top: 4px solid #1e3c72; 
+            border-radius: 50%; 
+            width: 50px; 
+            height: 50px; 
+            animation: spin 1s linear infinite; 
+            margin: 0 auto 20px; 
+        }}
+        @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
+        .user-info {{ 
+            background: #e3f2fd; 
+            padding: 15px; 
+            border-radius: 8px; 
+            margin-bottom: 20px; 
+            text-align: center; 
+            font-weight: 500;
+        }}
+        .user-info a {{ color: #1976d2; text-decoration: none; font-weight: 600; }}
+        .user-info a:hover {{ text-decoration: underline; }}
+        .image-upload {{ 
+            background: #f8f9fa; 
+            border: 3px dashed #dee2e6; 
+            border-radius: 10px; 
+            padding: 30px; 
+            text-align: center; 
+            margin: 20px 0; 
+            cursor: pointer; 
+            transition: all 0.3s ease;
+        }}
+        .image-upload:hover {{ border-color: #1e3c72; background: #e3f2fd; }}
+        .image-upload input[type="file"] {{ display: none; }}
+        .or-divider {{ 
+            text-align: center; 
+            margin: 25px 0; 
+            color: #666; 
+            font-weight: 600; 
+            position: relative; 
+        }}
+        .or-divider:before {{ 
+            content: ''; 
+            position: absolute; 
+            top: 50%; 
+            left: 0; 
+            right: 0; 
+            height: 1px; 
+            background: #dee2e6; 
+            z-index: 1; 
+        }}
+        .or-divider span {{ 
+            background: white; 
+            padding: 0 20px; 
+            position: relative; 
+            z-index: 2; 
+        }}
+        .part-badge {{ 
+            display: inline-block; 
+            color: white; 
+            padding: 4px 10px; 
+            border-radius: 6px; 
+            font-size: 12px; 
+            font-weight:
