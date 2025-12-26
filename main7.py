@@ -33,7 +33,7 @@ if ANTHROPIC_API_KEY:
 else:
     # Para desarrollo sin API key o primera ejecución
     client = None
-    print("ADVERTENCIA: ANTHROPIC_API_KEY no encontrada. La IA no funcionará correctamente.")
+    print("ADVERTENCIA: ANTHROPIC_API_KEY no encontrada. Se usará MODO SIMULACIÓN.")
 
 # =============================================================================
 # FIREBASE AUTH CLASS & HELPERS
@@ -163,6 +163,10 @@ def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not firebase_auth.is_user_logged_in():
+            # Handle AJAX/JSON requests
+            if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                 return jsonify({'error': 'Unauthorized', 'redirect': url_for('auth_login_page')}), 401
+
             flash('Tu sesion ha expirado. Inicia sesion nuevamente.', 'warning')
             return redirect(url_for('auth_login_page'))
         return f(*args, **kwargs)
@@ -1173,7 +1177,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             try {
                 const response = await fetch('/iniciar-debate', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
                     body: JSON.stringify({
                         producto: producto,
                         cantidad_agentes: cantidad,
@@ -1182,6 +1189,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         idioma: idioma
                     })
                 });
+
+                if (response.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
 
                 const data = await response.json();
 
@@ -1216,7 +1228,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             btnPdf.innerHTML = '<span class="spinner"></span> ' + t.btnPdfDescargando;
 
             try {
-                const response = await fetch('/descargar-pdf');
+                const response = await fetch('/descargar-pdf', {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
+
+                if (response.status === 401) {
+                    window.location.href = '/login';
+                    return;
+                }
 
                 if (response.ok) {
                     const blob = await response.blob();
@@ -1641,11 +1660,39 @@ def actualizar_agentes(cantidad=100, region="global", idioma="es"):
     return AGENTES
 
 def generar_respuesta_agente(agente_id, producto, historial):
-    if not client:
-        return "Error: No API Key configured"
-
     agente = AGENTES[agente_id]
     idioma = agente.get("idioma", "es")
+
+    if not client:
+        # Modo simulación/mock para cuando no hay API Key
+        respuestas_simuladas = [
+            "Desde mi perspectiva profesional, veo un potencial interesante en esta propuesta, aunque hay riesgos operativos.",
+            "Me preocupa la escalabilidad del modelo de negocio a largo plazo.",
+            "La propuesta de valor es clara, pero el mercado está saturado.",
+            "Innovador, pero requiere una estrategia de marketing muy sólida.",
+            "Financieramente viable si se controlan los costos de adquisición de clientes.",
+            "El diseño de la experiencia de usuario será crítico para el éxito.",
+            "Legalmente veo algunas áreas grises que deben aclararse.",
+            "Me encanta el enfoque, creo que hay un nicho desatendido aquí.",
+            "Soy escéptico sobre la adopción masiva de este producto.",
+            "Técnicamente es factible, pero el mantenimiento será costoso."
+        ]
+        if idioma == "en":
+            respuestas_simuladas = [
+                "From my professional perspective, I see interesting potential, though there are operational risks.",
+                "I am concerned about the long-term scalability of the business model.",
+                "The value proposition is clear, but the market is saturated.",
+                "Innovative, but requires a very solid marketing strategy.",
+                "Financially viable if customer acquisition costs are controlled.",
+                "User experience design will be critical for success.",
+                "Legally I see some gray areas that need clarification.",
+                "I love the approach, I think there is an underserved niche here.",
+                "I am skeptical about the mass adoption of this product.",
+                "Technically feasible, but maintenance will be costly."
+            ]
+
+        prefix = "(SIMULADO) "
+        return prefix + random.choice(respuestas_simuladas)
 
     historial_reciente = historial[-3:] if len(historial) > 3 else historial
 
@@ -1685,7 +1732,7 @@ Give your professional opinion (2-3 sentences):"""
 
 def generar_resumen(producto, historial, region="global", idioma="es"):
     if not client:
-        return "Error: No API Key configured"
+        return "Resumen no disponible en modo simulación (falta API Key)."
 
     if idioma == "es":
         region_nombre = REGIONES.get(region, REGIONES["global"])["nombre"]
@@ -1948,11 +1995,12 @@ def generar_pdf(producto, debate, resumen, region, idioma, total_agentes, total_
 # =============================================================================
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)  # Necesario para sesiones
+# Usar clave secreta persistente para evitar que las sesiones caduquen al reiniciar workers
+app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24))
 
-ultimo_debate = {
-    "debate": []
-}
+# Almacenamiento en memoria de debates por usuario (user_id -> debate_data)
+# En producción, esto debería ir a una base de datos o Redis
+user_debates = {}
 
 @app.route("/login", methods=["GET", "POST"])
 def auth_login_page():
@@ -2011,7 +2059,8 @@ def home():
 @app.route("/iniciar-debate", methods=["POST"])
 @login_required
 def iniciar_debate():
-    global ultimo_debate
+    current_user = firebase_auth.get_current_user()
+    user_id = current_user['user_id'] if current_user else 'anonymous'
 
     datos = request.get_json()
     producto = datos.get("producto", "")
@@ -2048,7 +2097,7 @@ def iniciar_debate():
                 "ronda": ronda
             }
             historial.append(mensaje)
-            time.sleep(0.1) # Reducido un poco para agilidad
+            # time.sleep(0.1)  # Removed for speed on Render
 
     resumen = generar_resumen(producto, historial, region, idioma)
 
@@ -2057,15 +2106,16 @@ def iniciar_debate():
     else:
         region_nombre = REGIONES.get(region, REGIONES["global"])["nombre_en"]
 
-    # Guardar datos para el PDF
-    ultimo_debate = {
+    # Guardar datos para el PDF específico del usuario
+    user_debates[user_id] = {
         "producto": producto,
         "debate": historial,
         "resumen": resumen,
         "region": region_nombre,
         "idioma": idioma,
         "total_agentes": cantidad_agentes,
-        "total_rondas": rondas
+        "total_rondas": rondas,
+        "timestamp": datetime.now()
     }
 
     return jsonify({
@@ -2081,20 +2131,23 @@ def iniciar_debate():
 @app.route("/descargar-pdf", methods=["GET"])
 @login_required
 def descargar_pdf():
-    global ultimo_debate
+    current_user = firebase_auth.get_current_user()
+    user_id = current_user['user_id'] if current_user else 'anonymous'
 
-    if not ultimo_debate["debate"]:
-        return jsonify({"error": "No hay debate disponible para descargar"}), 400
+    debate_data = user_debates.get(user_id)
+
+    if not debate_data or not debate_data.get("debate"):
+        return jsonify({"error": "No hay debate disponible para descargar. Inicia un nuevo debate."}), 400
 
     try:
         pdf_buffer = generar_pdf(
-            ultimo_debate["producto"],
-            ultimo_debate["debate"],
-            ultimo_debate["resumen"],
-            ultimo_debate["region"],
-            ultimo_debate["idioma"],
-            ultimo_debate["total_agentes"],
-            ultimo_debate["total_rondas"]
+            debate_data["producto"],
+            debate_data["debate"],
+            debate_data["resumen"],
+            debate_data["region"],
+            debate_data["idioma"],
+            debate_data["total_agentes"],
+            debate_data["total_rondas"]
         )
 
         # Generar nombre del archivo
