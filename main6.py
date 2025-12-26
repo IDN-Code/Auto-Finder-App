@@ -1051,7 +1051,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <!-- Footer -->
         <div class="footer">
-            <p>© 2024 ProjectTeam 100 - <span data-es="Todos los derechos reservados" data-en="All rights reserved">Todos los derechos reservados</span></p>
+            <p>© 2026 ProjectTeam 100 - <span data-es="Todos los derechos reservados" data-en="All rights reserved">Todos los derechos reservados</span></p>
         </div>
     </div>
 
