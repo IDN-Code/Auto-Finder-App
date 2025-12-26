@@ -1,0 +1,6 @@
+ANTHROPIC_API_KEY=sk-ant-api03-...
+SMTP_SERVER=smtp.gmail.com
+SMTP_PORT=587
+SMTP_EMAIL=tu_correo@gmail.com
+SMTP_PASSWORD=tu_contraseña_de_aplicacion
+SECRET_KEY=clave_secreta_aleatoria_larga_y_segura
