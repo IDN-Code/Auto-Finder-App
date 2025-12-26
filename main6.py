@@ -1845,13 +1845,22 @@ class FirebaseAuth:
     def __init__(self):
         self.firebase_web_api_key = os.environ.get("FIREBASE_WEB_API_KEY")
         if not self.firebase_web_api_key:
-            print("WARNING: FIREBASE_WEB_API_KEY no configurada")
+            print("=" * 50)
+            print("WARNING: FIREBASE_WEB_API_KEY no configurada!")
+            print("Por favor configura esta variable en tu archivo .env (local)")
+            print("o en el Dashboard de Render (producción).")
+            print("=" * 50)
         else:
-            print("SUCCESS: Firebase Auth configurado")
+            print("SUCCESS: Firebase Auth configurado correctamente")
 
     def login_user(self, email, password):
         if not self.firebase_web_api_key:
-            return {'success': False, 'message': 'Servicio no configurado', 'user_data': None, 'error_code': 'SERVICE_NOT_CONFIGURED'}
+            return {
+                'success': False,
+                'message': 'Error de configuración: FIREBASE_WEB_API_KEY no encontrada. Revisa las variables de entorno.',
+                'user_data': None,
+                'error_code': 'SERVICE_NOT_CONFIGURED'
+            }
 
         url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={self.firebase_web_api_key}"
         payload = {'email': email, 'password': password, 'returnSecureToken': True}
