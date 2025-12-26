@@ -3,7 +3,9 @@ import random
 import io
 import time
 from datetime import datetime
-from flask import Flask, render_template_string, request, jsonify, send_file
+from functools import wraps
+import requests
+from flask import Flask, render_template_string, request, jsonify, send_file, session, redirect, url_for, flash
 import anthropic
 from dotenv import load_dotenv
 from reportlab.lib import colors
@@ -34,8 +36,468 @@ else:
     print("ADVERTENCIA: ANTHROPIC_API_KEY no encontrada. La IA no funcionará correctamente.")
 
 # =============================================================================
-# HTML TEMPLATE
+# FIREBASE AUTH CLASS & HELPERS
 # =============================================================================
+
+class FirebaseAuth:
+    def __init__(self):
+        self.firebase_web_api_key = os.environ.get("FIREBASE_WEB_API_KEY")
+        if not self.firebase_web_api_key:
+            print("WARNING: FIREBASE_WEB_API_KEY no configurada")
+        else:
+            print("SUCCESS: Firebase Auth configurado")
+
+    def login_user(self, email, password):
+        if not self.firebase_web_api_key:
+            return {'success': False, 'message': 'Servicio no configurado', 'user_data': None, 'error_code': 'SERVICE_NOT_CONFIGURED'}
+
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={self.firebase_web_api_key}"
+        payload = {'email': email, 'password': password, 'returnSecureToken': True}
+
+        try:
+            response = requests.post(url, json=payload, timeout=8)
+            response.raise_for_status()
+            user_data = response.json()
+
+            return {
+                'success': True,
+                'message': 'Bienvenido! Has iniciado sesion correctamente.',
+                'user_data': {
+                    'user_id': user_data['localId'],
+                    'email': user_data['email'],
+                    'display_name': user_data.get('displayName', email.split('@')[0]),
+                    'id_token': user_data['idToken']
+                },
+                'error_code': None
+            }
+        except requests.exceptions.HTTPError as e:
+            try:
+                error_msg = e.response.json().get('error', {}).get('message', 'ERROR')
+                if 'INVALID' in error_msg or 'EMAIL_NOT_FOUND' in error_msg:
+                    return {'success': False, 'message': 'Correo o contraseña incorrectos', 'user_data': None, 'error_code': 'INVALID_CREDENTIALS'}
+                elif 'TOO_MANY_ATTEMPTS' in error_msg:
+                    return {'success': False, 'message': 'Demasiados intentos fallidos', 'user_data': None, 'error_code': 'TOO_MANY_ATTEMPTS'}
+                else:
+                    return {'success': False, 'message': 'Error de autenticacion', 'user_data': None, 'error_code': 'FIREBASE_ERROR'}
+            except:
+                return {'success': False, 'message': 'Error de conexion', 'user_data': None, 'error_code': 'CONNECTION_ERROR'}
+        except Exception as e:
+            print(f"Firebase auth error: {e}")
+            return {'success': False, 'message': 'Error interno del servidor', 'user_data': None, 'error_code': 'UNEXPECTED_ERROR'}
+
+    def register_user(self, email, password):
+        if not self.firebase_web_api_key:
+            return {'success': False, 'message': 'Servicio no configurado'}
+
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={self.firebase_web_api_key}"
+        payload = {'email': email, 'password': password, 'returnSecureToken': True}
+
+        try:
+            response = requests.post(url, json=payload, timeout=8)
+            response.raise_for_status()
+            user_data = response.json()
+            return {
+                'success': True,
+                'message': 'Registro exitoso! Iniciando sesion...',
+                'user_data': {
+                    'user_id': user_data['localId'],
+                    'email': user_data['email'],
+                    'display_name': email.split('@')[0],
+                    'id_token': user_data['idToken']
+                }
+            }
+        except requests.exceptions.HTTPError as e:
+            try:
+                error_msg = e.response.json().get('error', {}).get('message', '')
+                if 'EMAIL_EXISTS' in error_msg:
+                    return {'success': False, 'message': 'El correo ya esta registrado'}
+                elif 'WEAK_PASSWORD' in error_msg:
+                    return {'success': False, 'message': 'La contraseña debe tener al menos 6 caracteres'}
+                else:
+                    return {'success': False, 'message': f'Error de registro: {error_msg}'}
+            except:
+                 return {'success': False, 'message': 'Error desconocido en registro'}
+        except Exception as e:
+            return {'success': False, 'message': f'Error de servidor: {str(e)}'}
+
+    def set_user_session(self, user_data):
+        session['user_id'] = user_data['user_id']
+        session['user_name'] = user_data['display_name']
+        session['user_email'] = user_data['email']
+        session['id_token'] = user_data['id_token']
+        session['login_time'] = datetime.now().isoformat()
+        session.permanent = True
+
+    def clear_user_session(self):
+        important_data = {key: session.get(key) for key in ['timestamp'] if key in session}
+        session.clear()
+        for key, value in important_data.items():
+            session[key] = value
+
+    def is_user_logged_in(self):
+        if 'user_id' not in session or session['user_id'] is None:
+            return False
+        if 'login_time' in session:
+            try:
+                login_time = datetime.fromisoformat(session['login_time'])
+                time_diff = (datetime.now() - login_time).total_seconds()
+                if time_diff > 7200:  # 2 horas maximo
+                    return False
+            except:
+                pass
+        return True
+
+    def get_current_user(self):
+        if not self.is_user_logged_in():
+            return None
+        return {
+            'user_id': session.get('user_id'),
+            'user_name': session.get('user_name'),
+            'user_email': session.get('user_email'),
+            'id_token': session.get('id_token')
+        }
+
+firebase_auth = FirebaseAuth()
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not firebase_auth.is_user_logged_in():
+            flash('Tu sesion ha expirado. Inicia sesion nuevamente.', 'warning')
+            return redirect(url_for('auth_login_page'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+# =============================================================================
+# HTML TEMPLATES
+# =============================================================================
+
+LOGIN_TEMPLATE = """<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - SIMULMARKET 100</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --background: #f8fafc;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+        }
+
+        body {
+            background-color: var(--background);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        .login-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .logo {
+            text-align: center;
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: var(--text-primary);
+            margin-bottom: 2rem;
+        }
+
+        .logo span {
+            color: var(--primary);
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            font-size: 1rem;
+            box-sizing: border-box;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+
+        button {
+            width: 100%;
+            background: var(--primary);
+            color: white;
+            padding: 0.75rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: var(--primary-dark);
+        }
+
+        .alert {
+            padding: 0.75rem;
+            margin-bottom: 1rem;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+
+        .alert-error {
+            background-color: #fee2e2;
+            color: #991b1b;
+        }
+
+        .alert-warning {
+            background-color: #fef3c7;
+            color: #92400e;
+        }
+
+        .alert-success {
+            background-color: #dcfce7;
+            color: #166534;
+        }
+
+        .footer-link {
+            text-align: center;
+            margin-top: 1.5rem;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+
+        .footer-link a {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .footer-link a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="logo">
+            🤖 SIMUL<span>MARKET</span> 100
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'error' if category == 'error' else ('warning' if category == 'warning' else 'success') }}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form method="POST">
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" required placeholder="correo@ejemplo.com">
+            </div>
+
+            <div class="form-group">
+                <label for="password">Contraseña</label>
+                <input type="password" id="password" name="password" required placeholder="••••••••">
+            </div>
+
+            <button type="submit">Iniciar Sesión</button>
+
+            <div class="footer-link">
+                ¿No tienes cuenta? <a href="{{ url_for('auth_register_page') }}">Regístrate aquí</a>
+            </div>
+        </form>
+    </div>
+</body>
+</html>"""
+
+REGISTER_TEMPLATE = """<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registro - SIMULMARKET 100</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --background: #f8fafc;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+        }
+
+        body {
+            background-color: var(--background);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        .login-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .logo {
+            text-align: center;
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: var(--text-primary);
+            margin-bottom: 2rem;
+        }
+
+        .logo span {
+            color: var(--primary);
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            font-size: 1rem;
+            box-sizing: border-box;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+
+        button {
+            width: 100%;
+            background: var(--primary);
+            color: white;
+            padding: 0.75rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: var(--primary-dark);
+        }
+
+        .alert {
+            padding: 0.75rem;
+            margin-bottom: 1rem;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+
+        .alert-error {
+            background-color: #fee2e2;
+            color: #991b1b;
+        }
+
+        .footer-link {
+            text-align: center;
+            margin-top: 1.5rem;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+
+        .footer-link a {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .footer-link a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="logo">
+            🤖 SIMUL<span>MARKET</span> 100
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'error' if category == 'error' else 'warning' }}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form method="POST">
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" required placeholder="correo@ejemplo.com">
+            </div>
+
+            <div class="form-group">
+                <label for="password">Contraseña (mínimo 6 caracteres)</label>
+                <input type="password" id="password" name="password" required placeholder="••••••••" minlength="6">
+            </div>
+
+            <div class="form-group">
+                <label for="confirm_password">Confirmar Contraseña</label>
+                <input type="password" id="confirm_password" name="confirm_password" required placeholder="••••••••" minlength="6">
+            </div>
+
+            <button type="submit">Registrarse</button>
+
+            <div class="footer-link">
+                ¿Ya tienes cuenta? <a href="{{ url_for('auth_login_page') }}">Inicia sesión</a>
+            </div>
+        </form>
+    </div>
+</body>
+</html>"""
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="es">
@@ -101,6 +563,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             font-size: 1rem;
         }
 
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
         .tagline {
             font-size: 0.9rem;
             opacity: 0.9;
@@ -130,6 +598,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 50%;
             display: block;
             box-shadow: 0 0 8px #10b981;
+        }
+
+        .logout-btn {
+            background: rgba(255,255,255,0.1);
+            color: white;
+            text-decoration: none;
+            padding: 0.3rem 0.8rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            transition: background 0.2s;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .logout-btn:hover {
+            background: rgba(255,255,255,0.2);
         }
 
         /* Main Layout */
@@ -456,8 +939,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="logo">
             🤖 SIMUL<span>MARKET</span> 100
         </div>
-        <div class="tagline" id="tagline">Massive AI Focus Group Simulator</div>
-        <div class="status-badge" id="status-badge">Ready</div>
+
+        <div class="header-controls">
+            <div class="tagline" id="tagline">Massive AI Focus Group Simulator</div>
+            <div class="status-badge" id="status-badge">Ready</div>
+            <a href="/logout" class="logout-btn">Logout</a>
+        </div>
     </header>
 
     <main>
@@ -489,9 +976,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
 
             <div class="form-group">
-                <label for="cantidad_agentes" id="label-agentes">Cantidad de Agentes (10-100)</label>
+                <label for="cantidad_agentes" id="label-agentes">Cantidad de Agentes (5-100)</label>
                 <div class="range-container">
-                    <input type="range" id="cantidad_agentes" min="10" max="100" step="10" value="30" oninput="this.nextElementSibling.value = this.value">
+                    <input type="range" id="cantidad_agentes" min="5" max="100" step="5" value="30" oninput="this.nextElementSibling.value = this.value">
                     <output>30</output>
                 </div>
             </div>
@@ -555,7 +1042,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 placeholder: "Describe tu producto aquí. Ej: Una app de delivery de comida saludable...",
                 idioma: "Idioma / Language",
                 region: "Región del Panel",
-                agentes: "Cantidad de Agentes (10-100)",
+                agentes: "Cantidad de Agentes (5-100)",
                 rondas: "Rondas de Debate (2-5)",
                 debateTitle: "Sala de Debate",
                 esperando: "Listo",
@@ -581,7 +1068,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 placeholder: "Describe your product here. Ex: A healthy food delivery app...",
                 idioma: "Language",
                 region: "Panel Region",
-                agentes: "Number of Agents (10-100)",
+                agentes: "Number of Agents (5-100)",
                 rondas: "Debate Rounds (2-5)",
                 debateTitle: "Debate Room",
                 esperando: "Ready",
@@ -1461,15 +1948,68 @@ def generar_pdf(producto, debate, resumen, region, idioma, total_agentes, total_
 # =============================================================================
 
 app = Flask(__name__)
+app.secret_key = os.urandom(24)  # Necesario para sesiones
+
 ultimo_debate = {
     "debate": []
 }
 
+@app.route("/login", methods=["GET", "POST"])
+def auth_login_page():
+    if firebase_auth.is_user_logged_in():
+        return redirect(url_for('home'))
+
+    if request.method == "POST":
+        email = request.form.get("email")
+        password = request.form.get("password")
+
+        result = firebase_auth.login_user(email, password)
+
+        if result['success']:
+            firebase_auth.set_user_session(result['user_data'])
+            return redirect(url_for('home'))
+        else:
+            flash(result['message'], 'error')
+
+    return render_template_string(LOGIN_TEMPLATE)
+
+@app.route("/register", methods=["GET", "POST"])
+def auth_register_page():
+    if firebase_auth.is_user_logged_in():
+        return redirect(url_for('home'))
+
+    if request.method == "POST":
+        email = request.form.get("email")
+        password = request.form.get("password")
+        confirm_password = request.form.get("confirm_password")
+
+        if password != confirm_password:
+            flash('Las contraseñas no coinciden', 'error')
+        else:
+            result = firebase_auth.register_user(email, password)
+
+            if result['success']:
+                firebase_auth.set_user_session(result['user_data'])
+                flash('Registro exitoso! Bienvenido.', 'success')
+                return redirect(url_for('home'))
+            else:
+                flash(result['message'], 'error')
+
+    return render_template_string(REGISTER_TEMPLATE)
+
+@app.route("/logout")
+def logout():
+    firebase_auth.clear_user_session()
+    flash('Has cerrado sesión exitosamente.', 'success')
+    return redirect(url_for('auth_login_page'))
+
 @app.route("/")
+@login_required
 def home():
     return render_template_string(HTML_TEMPLATE, agentes=AGENTES, regiones=REGIONES, idiomas=IDIOMAS)
 
 @app.route("/iniciar-debate", methods=["POST"])
+@login_required
 def iniciar_debate():
     global ultimo_debate
 
@@ -1484,7 +2024,7 @@ def iniciar_debate():
         error_msg = "Debes describir un producto" if idioma == "es" else "You must describe a product"
         return jsonify({"error": error_msg}), 400
 
-    cantidad_agentes = min(cantidad_agentes, 100)
+    cantidad_agentes = min(max(cantidad_agentes, 5), 100) # Minimum 5, Max 100
     rondas = min(max(rondas, 2), 5)
 
     agentes_actuales = actualizar_agentes(cantidad_agentes, region, idioma)
@@ -1539,6 +2079,7 @@ def iniciar_debate():
     })
 
 @app.route("/descargar-pdf", methods=["GET"])
+@login_required
 def descargar_pdf():
     global ultimo_debate
 
@@ -1576,6 +2117,7 @@ if __name__ == "__main__":
     print(f"\n📊 Agentes cargados: {len(AGENTES)}")
     print("🌍 Regiones:", ", ".join(REGIONES.keys()))
     print("🌐 Idiomas:", ", ".join(IDIOMAS.keys()))
+    print("🔒 Auth: Firebase (Registro habilitado)")
     print("📥 Descarga PDF habilitada")
     print("📍 Abre tu navegador en: http://localhost:5000")
     print("🛑 Para detener: Ctrl+C\n")
