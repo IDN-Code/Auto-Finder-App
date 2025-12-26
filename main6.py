@@ -13,8 +13,10 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
+from functools import wraps
 
-from flask import Flask, render_template_string, request, jsonify, send_file
+import requests
+from flask import Flask, render_template_string, request, jsonify, send_file, session, redirect, url_for, flash
 from dotenv import load_dotenv
 import anthropic
 
@@ -39,6 +41,9 @@ load_dotenv()
 
 # API Key de Anthropic
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+# Firebase Web API Key
+FIREBASE_WEB_API_KEY = os.getenv("FIREBASE_WEB_API_KEY")
 
 # Configuración de Email (SMTP)
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
@@ -158,8 +163,72 @@ GRADIENT_END = colors.HexColor("#764ba2")
 
 
 # ==============================================================================
-# HTML TEMPLATE
+# HTML TEMPLATES
 # ==============================================================================
+LOGIN_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iniciar Sesion | ProjectTeam 100</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #0D1B2A 0%, #1E3A5F 100%); min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px; color: #333; }
+        .auth-container { max-width: 420px; width: 100%; background: white; border-radius: 16px; box-shadow: 0 20px 40px rgba(0,0,0,0.2); overflow: hidden; }
+        .form-header { text-align: center; padding: 40px 30px 20px; background: white; }
+        .logo { font-size: 48px; margin-bottom: 10px; display: block; }
+        .form-header h1 { font-size: 24px; margin-bottom: 8px; color: #1E3A5F; font-weight: 700; }
+        .form-header p { opacity: 0.7; font-size: 14px; margin: 0; }
+        .form-body { padding: 0 30px 40px; }
+        form { display: flex; flex-direction: column; gap: 20px; }
+        .input-group { display: flex; flex-direction: column; gap: 8px; }
+        .input-group label { font-weight: 600; color: #1E3A5F; font-size: 14px; }
+        .input-group input { padding: 14px 16px; border: 2px solid #e2e8f0; border-radius: 10px; font-size: 16px; transition: all 0.3s ease; }
+        .input-group input:focus { outline: 0; border-color: #3498DB; box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1); }
+        .submit-btn { background: linear-gradient(135deg, #1E3A5F, #3498DB); color: white; border: none; padding: 16px; font-size: 16px; font-weight: 600; border-radius: 10px; cursor: pointer; transition: transform 0.2s ease; margin-top: 10px; }
+        .submit-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(52, 152, 219, 0.3); }
+        .flash-messages { list-style: none; padding: 0 30px; margin: 0; }
+        .flash { padding: 12px; margin-bottom: 15px; border-radius: 8px; text-align: center; font-size: 14px; font-weight: 500; }
+        .flash.success { background-color: #d1fae5; color: #065f46; }
+        .flash.danger { background-color: #fee2e2; color: #b91c1c; }
+        .flash.warning { background-color: #fef3c7; color: #92400e; }
+    </style>
+</head>
+<body>
+    <div class="auth-container">
+        <div class="form-header">
+            <span class="logo">🚀</span>
+            <h1>ProjectTeam 100</h1>
+            <p>Ingresa para comenzar tu proyecto</p>
+        </div>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <ul class="flash-messages">
+                    {% for category, message in messages %}
+                        <li class="flash {{ category }}">{{ message }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+        <div class="form-body">
+            <form action="{{ url_for('auth_login') }}" method="post">
+                <div class="input-group">
+                    <label for="email">Correo Electrónico</label>
+                    <input type="email" name="email" id="email" required placeholder="tu@email.com">
+                </div>
+                <div class="input-group">
+                    <label for="password">Contraseña</label>
+                    <input type="password" name="password" id="password" required placeholder="••••••••">
+                </div>
+                <button type="submit" class="submit-btn">Entrar</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -1770,6 +1839,104 @@ Desarrolla el plan de proyecto completo con el nivel de detalle solicitado.
 
 
 # ==============================================================================
+# FIREBASE AUTH
+# ==============================================================================
+class FirebaseAuth:
+    def __init__(self):
+        self.firebase_web_api_key = os.environ.get("FIREBASE_WEB_API_KEY")
+        if not self.firebase_web_api_key:
+            print("WARNING: FIREBASE_WEB_API_KEY no configurada")
+        else:
+            print("SUCCESS: Firebase Auth configurado")
+
+    def login_user(self, email, password):
+        if not self.firebase_web_api_key:
+            return {'success': False, 'message': 'Servicio no configurado', 'user_data': None, 'error_code': 'SERVICE_NOT_CONFIGURED'}
+
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={self.firebase_web_api_key}"
+        payload = {'email': email, 'password': password, 'returnSecureToken': True}
+
+        try:
+            response = requests.post(url, json=payload, timeout=8)
+            response.raise_for_status()
+            user_data = response.json()
+
+            return {
+                'success': True,
+                'message': 'Bienvenido! Has iniciado sesion correctamente.',
+                'user_data': {
+                    'user_id': user_data['localId'],
+                    'email': user_data['email'],
+                    'display_name': user_data.get('displayName', email.split('@')[0]),
+                    'id_token': user_data['idToken']
+                },
+                'error_code': None
+            }
+        except requests.exceptions.HTTPError as e:
+            try:
+                error_msg = e.response.json().get('error', {}).get('message', 'ERROR')
+                if 'INVALID' in error_msg or 'EMAIL_NOT_FOUND' in error_msg:
+                    return {'success': False, 'message': 'Correo o contraseña incorrectos', 'user_data': None, 'error_code': 'INVALID_CREDENTIALS'}
+                elif 'TOO_MANY_ATTEMPTS' in error_msg:
+                    return {'success': False, 'message': 'Demasiados intentos fallidos', 'user_data': None, 'error_code': 'TOO_MANY_ATTEMPTS'}
+                else:
+                    return {'success': False, 'message': 'Error de autenticacion', 'user_data': None, 'error_code': 'FIREBASE_ERROR'}
+            except:
+                return {'success': False, 'message': 'Error de conexion', 'user_data': None, 'error_code': 'CONNECTION_ERROR'}
+        except Exception as e:
+            print(f"Firebase auth error: {e}")
+            return {'success': False, 'message': 'Error interno del servidor', 'user_data': None, 'error_code': 'UNEXPECTED_ERROR'}
+
+    def set_user_session(self, user_data):
+        session['user_id'] = user_data['user_id']
+        session['user_name'] = user_data['display_name']
+        session['user_email'] = user_data['email']
+        session['id_token'] = user_data['id_token']
+        session['login_time'] = datetime.now().isoformat()
+        session.permanent = True
+
+    def clear_user_session(self):
+        important_data = {key: session.get(key) for key in ['timestamp'] if key in session}
+        session.clear()
+        for key, value in important_data.items():
+            session[key] = value
+
+    def is_user_logged_in(self):
+        if 'user_id' not in session or session['user_id'] is None:
+            return False
+        if 'login_time' in session:
+            try:
+                login_time = datetime.fromisoformat(session['login_time'])
+                time_diff = (datetime.now() - login_time).total_seconds()
+                if time_diff > 7200:  # 2 horas maximo
+                    return False
+            except:
+                pass
+        return True
+
+    def get_current_user(self):
+        if not self.is_user_logged_in():
+            return None
+        return {
+            'user_id': session.get('user_id'),
+            'user_name': session.get('user_name'),
+            'user_email': session.get('user_email'),
+            'id_token': session.get('id_token')
+        }
+
+firebase_auth = FirebaseAuth()
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not firebase_auth.is_user_logged_in():
+            flash('Tu sesion ha expirado. Inicia sesion nuevamente.', 'warning')
+            return redirect(url_for('auth_login_page'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+# ==============================================================================
 # PDF GENERATOR
 # ==============================================================================
 class PDFGenerator:
@@ -2751,8 +2918,41 @@ app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))
 # Almacenamiento temporal en memoria para sesiones
 sessions = {}
 
+# Auth Routes
+@app.route('/auth/login-page')
+def auth_login_page():
+    if firebase_auth.is_user_logged_in():
+        return redirect(url_for('index'))
+    return render_template_string(LOGIN_TEMPLATE)
+
+@app.route('/auth/login', methods=['POST'])
+def auth_login():
+    email = request.form.get('email', '').strip()
+    password = request.form.get('password', '').strip()
+
+    if not email or not password:
+        flash('Por favor completa todos los campos.', 'danger')
+        return redirect(url_for('auth_login_page'))
+
+    result = firebase_auth.login_user(email, password)
+
+    if result['success']:
+        firebase_auth.set_user_session(result['user_data'])
+        flash(result['message'], 'success')
+        return redirect(url_for('index'))
+    else:
+        flash(result['message'], 'danger')
+        return redirect(url_for('auth_login_page'))
+
+@app.route('/auth/logout')
+def auth_logout():
+    firebase_auth.clear_user_session()
+    flash('Has cerrado la sesion correctamente.', 'success')
+    return redirect(url_for('auth_login_page'))
+
 
 @app.route('/')
+@login_required
 def index():
     """Página principal"""
     return render_template_string(HTML_TEMPLATE,
@@ -2762,6 +2962,7 @@ def index():
 
 
 @app.route('/api/generate-questions', methods=['POST'])
+@login_required
 def api_generate_questions():
     """Genera preguntas de clarificación basadas en datos iniciales"""
     try:
@@ -2804,6 +3005,7 @@ def api_generate_questions():
 
 
 @app.route('/api/submit-answer', methods=['POST'])
+@login_required
 def api_submit_answer():
     """Recibe respuesta a una pregunta"""
     try:
@@ -2850,6 +3052,7 @@ def api_submit_answer():
 
 
 @app.route('/api/generate-project', methods=['POST'])
+@login_required
 def api_generate_project():
     """Genera el proyecto completo con equipo y plan"""
     try:
@@ -2914,6 +3117,7 @@ def api_generate_project():
 
 
 @app.route('/api/generate-pdf', methods=['POST'])
+@login_required
 def api_generate_pdf():
     """Genera el PDF y lo envía por email"""
     try:
@@ -2965,6 +3169,7 @@ def api_generate_pdf():
 
 
 @app.route('/api/download-pdf/<session_id>')
+@login_required
 def api_download_pdf(session_id):
     """Descarga el PDF generado"""
     try:
@@ -3024,6 +3229,7 @@ def api_download_pdf(session_id):
 
 
 @app.route('/api/preview-team', methods=['POST'])
+@login_required
 def api_preview_team():
     """Preview del equipo generado"""
     try:
